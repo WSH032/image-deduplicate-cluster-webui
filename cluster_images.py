@@ -26,6 +26,7 @@ import pandas as pd
 from datetime import datetime
 import shutil
 import math
+import logging
 # from kneed import KneeLocator
 
 
@@ -140,7 +141,7 @@ def cluster_images(images_dir: str, confirmed_cluster_number: int, use_cache: bo
     try:
         pred_df.iloc[:,2:].astype(float)
     except Exception as e:
-        print(f"pred_df的标签部分包含了非法值 error: {e}")
+        logging.error(f"pred_df的标签部分包含了非法值 error: {e}")
 
 
     def find_duplicate_tags(tags_df):
@@ -235,7 +236,7 @@ def cluster_images(images_dir: str, confirmed_cluster_number: int, use_cache: bo
                             im.thumbnail( (resolution, resolution) )
                             im.save( os.path.join(cache_dir, image_name) )
                     except Exception as e:
-                        print(f"缓存 {image_name} 失败, error: {e}")
+                        logging.error(f"缓存 {image_name} 失败, error: {e}")
         print(f"缓存完成: {cache_dir}\nDone!")
         
     if use_cache:
@@ -275,7 +276,6 @@ def cluster_analyse(images_dir: str, max_cluster_number: int):
     image_files_list = searcher.image_files()
     tag_content_list = searcher.tag_content(error_then_tag_is="_no_tag")
     images_and_tags_tuple = tuple( zip( image_files_list, tag_content_list ) )
-    print(images_and_tags_tuple)
     
     # 提取标签特征
     # tfvec = skt.CountVectorizer()
@@ -331,7 +331,7 @@ def create_gr_gallery(max_gallery_number: int) -> list:
     gr_Accordion_and_Gallery_list = []
     for i in range(max_gallery_number):
         with gr.Accordion(f"聚类{i}", open=True, visible=False) as Gallery_Accordion:
-            gr_Accordion_and_Gallery_list.extend( [ Gallery_Accordion, gr.Gallery(value=[]).style(grid=[6], height="auto") ] )
+            gr_Accordion_and_Gallery_list.extend( [ Gallery_Accordion, gr.Gallery(value=[]).style(columns=[6], height="auto") ] )
     return gr_Accordion_and_Gallery_list
 
 
@@ -383,14 +383,14 @@ def confirm_cluster(process_clusters_method:int, global_dict_State: dict):
                 try:
                     os.rename( os.path.join(images_dir, image_name), os.path.join(images_dir, new_image_name) )
                 except Exception as e:
-                    print(f"重命名 {image_name} 失败, error: {e}")
+                    logging.error(f"重命名 {image_name} 失败, error: {e}")
                 # 重命名txt
                 txt_name = change_ext_to_txt(image_name)
                 new_txt_name = change_name_with_ext(txt_name, f"cluster{cluster_index}-{image_index:06d}-{time_now}")
                 try:
                     os.rename( os.path.join(images_dir, txt_name), os.path.join(images_dir, new_txt_name) )
                 except Exception as e:
-                    print(f"重命名 {txt_name} 失败, error: {e}")
+                    logging.error(f"重命名 {txt_name} 失败, error: {e}")
         print("重命名完成  Done!")
         
     if process_clusters_method == 0:
@@ -422,13 +422,13 @@ def confirm_cluster(process_clusters_method:int, global_dict_State: dict):
                 try:
                     process_func( os.path.join(images_dir, image_name), os.path.join(Cluster_son_folder_dir, image_name) )
                 except Exception as e:
-                    print(f"拷贝或移动 {image_name} 失败, error: {e}")
+                    logging.error(f"拷贝或移动 {image_name} 失败, error: {e}")
                 # 拷贝或移动txtx
                 txt_name = change_ext_to_txt(image_name)
                 try:
                     process_func( os.path.join(images_dir, txt_name), os.path.join(Cluster_son_folder_dir, txt_name) )
                 except Exception as e:
-                    print(f"拷贝或移动 {txt_name} 失败, error: {e}")
+                    logging.error(f"拷贝或移动 {txt_name} 失败, error: {e}")
         print(f"拷贝或移动完成: {Cluster_folder_dir}\nDone!")
         
     if process_clusters_method == 1:

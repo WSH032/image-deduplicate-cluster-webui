@@ -14,6 +14,7 @@ import bisect
 import os
 from tqdm import tqdm
 from PIL import Image
+import logging
 
 choose_image_index = ""
 encodings = {}
@@ -196,7 +197,7 @@ def delet(delet_images_str: str):
         try:
             os.remove( os.path.join(confirmed_images_dir,f) )
         except Exception as e:
-            print( f"删除 {f} 时遭遇错误： {e}" )
+            logging.error( f"删除 {f} 时遭遇错误： {e}" )
     print("删除完成 Done!")
     
     #重置状态，阻止使用自动选择，除非再扫描一次

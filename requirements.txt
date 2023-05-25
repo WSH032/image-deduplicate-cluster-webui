@@ -1,0 +1,15 @@
+# for all
+gradio>=3.24.1
+tqdm
+pandas
+pillow
+numpy
+
+# for deduplicate
+toml
+imagededup
+
+# for cluster
+scikit-learn >= 1.2.2
+matplotlib
+scipy
