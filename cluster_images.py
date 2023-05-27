@@ -27,7 +27,7 @@ from datetime import datetime
 import shutil
 import math
 import logging
-# from kneed import KneeLocator
+
 
 
 MAX_GALLERY_NUMBER = 100  # 画廊里展示的最大聚类数量为100
@@ -44,26 +44,50 @@ def comma_tokenizer(text: str) -> List[str]:
     return [tag.strip() for tag in text.split(',')]
 
 
-def create_Vectorizer(tokenizer: Callable[ [str], List[str] ]=None,
-                      use_CountVectorizer: bool=False
-                      ):
-    
+def vectorizer(images_dir: str, vectorizer_method: int, use_comma_tokenizer: bool, use_binary_tokenizer: bool):
     """
-    返回指定的特征提取器
-    默认返回 默认的TfidfVectorizer
+    读取images_dir下的图片或tags文本，用其生成特征向量
+    
+    images_dir为图片路径
+    vectorizer_method为特征提取方法
+        0 使用tfid
+        1 使用Count
+        2 使用WD14
+    use_comma_tokenizer对于前两种方法使用逗号分词器comma_tokenizer
+    use_binary_tokenizer对于前两种方法使用binary参数
+    
+    return vectorize_X_and_label_State=[X, tf_tags_list]
     """
     
-    tokenizer = comma_tokenizer
+    # 选择特征提取器
+    vectorizer_args_dict = dict(tokenizer=comma_tokenizer if use_comma_tokenizer else None,
+                                binary=use_binary_tokenizer,
+                                max_df=0.99)
+    if vectorizer_method == 0 :
+        tfvec = skt.TfidfVectorizer(**vectorizer_args_dict)
+    elif vectorizer_method == 1 :
+        tfvec = skt.CountVectorizer(**vectorizer_args_dict)
     
-    if use_CountVectorizer:
-        tfvec = skt.CountVectorize(tokenizer=tokenizer) 
-    else:
-        tfvec = skt.TfidfVectorizer(tokenizer=tokenizer, binary=True, max_df=0.99)
-        
-    return tfvec
+    
+    # 实例化搜索器
+    searcher = SearchImagesTags(images_dir, tag_file_ext=".txt")
+    # 读取图片名字， 用WD14
+    image_files_list = searcher.image_files()
+    # tag内容, 用于文本提取
+    tag_content_list = searcher.tag_content(error_then_tag_is="_no_tag")
+    
+    
+    # tags转为向量特征
+    X = tfvec.fit_transform(tag_content_list).toarray()  # 向量特征
+    tf_tags_list = tfvec.get_feature_names_out()  # 向量每列对应的tag
+    # 被过滤的tag
+    # stop_tags = tfvec.stop_words_
+    
+    return [X, tf_tags_list]
+    
 
 
-def cluster_images(images_dir: str, confirmed_cluster_number: int, use_cache: bool, global_dict_State: dict) -> list:
+def cluster_images(images_dir: str, confirmed_cluster_number: int, use_cache: bool, global_dict_State: dict, vectorize_X_and_label_State: list) -> list:
     """
     对指定目录下的图片进行聚类，将会使用该目录下与图片同名的txt中的tag做为特征
     confirmed_cluster_number为指定的聚类数
@@ -83,10 +107,9 @@ def cluster_images(images_dir: str, confirmed_cluster_number: int, use_cache: bo
     tags_list = [tags for _, tags in images_and_tags_tuple]
     
     # tags转为向量特征
-    tfvec = create_Vectorizer()
-    X = tfvec.fit_transform(tags_list).toarray()  # 向量特征
-    tf_tags_list = tfvec.get_feature_names_out()  # 向量每列对应的tag
-    stop_tags = tfvec.stop_words_  # 被过滤的tag
+    X = vectorize_X_and_label_State[0]  # 向量特征
+    tf_tags_list = vectorize_X_and_label_State[1]  # 向量每列对应的tag
+
     
     """ todo SVD降维
     SVD = TruncatedSVD( n_components = X.shape[1] - 1 )
@@ -188,8 +211,8 @@ def cluster_images(images_dir: str, confirmed_cluster_number: int, use_cache: bo
             k = min(10, X.shape[1])  # 最多只选10个特征，不够10个就按特征数来
             
             # 特征选择器
-            # Selector = SelectPercentile(chi2, percentile=30)
-            Selector = SelectKBest(chi2, k=k)
+            # Selector = SelectPercentile(chi2, percentile=30)  # 按百分比选择
+            Selector = SelectKBest(chi2, k=k)  # 按个数选择
             
             # 开始选择
             X_selected = Selector.fit_transform(X, temp_pred)  # 被选择的特征向量矩阵 用于调试
@@ -263,7 +286,7 @@ def cluster_images(images_dir: str, confirmed_cluster_number: int, use_cache: bo
     return visible_gr_gallery_list + unvisible_gr_gallery_list + [gr.update(visible=True)] + [global_dict_State]
 
 
-def cluster_analyse(images_dir: str, max_cluster_number: int):
+def cluster_analyse(images_dir: str, max_cluster_number: int, vectorize_X_and_label_State:list):
     """
     读取指定路径下的图片，并依据与图片同名的txt内的tags进行聚类
     将评估从聚类数从 2~max_cluster_number 的效果
@@ -277,14 +300,10 @@ def cluster_analyse(images_dir: str, max_cluster_number: int):
     tag_content_list = searcher.tag_content(error_then_tag_is="_no_tag")
     images_and_tags_tuple = tuple( zip( image_files_list, tag_content_list ) )
     
-    # 提取标签特征
-    # tfvec = skt.CountVectorizer()
-    # tfvec = skt.TfidfVectorizer(tokenizer=comma_tokenizer, binary=True) # 创建TfidfVectorizer对象，并指定分词器
-    
     tags_list = [tags for _, tags in images_and_tags_tuple]
     
-    tfvec = create_Vectorizer()
-    X = tfvec.fit_transform(tags_list).toarray()
+    # 提取特征标签
+    X = vectorize_X_and_label_State[0]  # 向量特征
     
     # 使用肘部法则和轮廓系数确定最优的聚类数
     wss = [] # 存储每个聚类数对应的簇内平方和
@@ -310,7 +329,8 @@ def cluster_analyse(images_dir: str, max_cluster_number: int):
     bset_cluster_number_DataFrame = Silhouette_DataFrame.sort_values(by='y', ascending=False).head(head_number)
     
     """
-    自动找拐点，在聚类数大了后效果不好
+    from kneed import KneeLocator
+    自动找拐点，在聚类数大了后效果不好，不再使用
     kl = KneeLocator(k_range, wss, curve="convex", direction="decreasing")
     kl.plot_knee()
     print( round(kl.elbow, 3) )
@@ -339,6 +359,7 @@ def confirm_cluster(process_clusters_method:int, global_dict_State: dict):
     """
     根据选择的图片处理方式，对global_dict_State中聚类后的图片列表，以及路径进行相关操作
     
+    # 以下是输入参数的例子：
     
     process_clusters_method = gr.Radio(label="图片处理方式",
                                        choices=["重命名原图片","在Cluster文件夹下生成聚类副本","移动原图至Cluster文件夹"],
@@ -454,20 +475,24 @@ with gr.Blocks(css=css) as demo:
     global_dict_State = gr.State(value={})  # 这个将会起到全局变量的作用，类似于globals()
     """
     全局列表
+    global_dict_State["common_duplicate_tags_set"] = common_duplicate_tags_set
+    global_dict_State["cluster_feature_tags_list"] = cluster_feature_tags_list
     global_dict_State["clustered_images_list"] = clustered_images_list
     global_dict_State["images_dir"] = images_dir
     """
     
     with gr.Box():
+        vectorize_X_and_label_State = gr.State(value=[])  # 用于存放特征向量，和其对应的tag
         with gr.Row():
-            with gr.Column(scale=10):
-                images_dir = gr.Textbox(label="图片目录")
-            """
-            with gr.Column(scale=10):
-                tags_dir = gr.Textbox(label="tags目录（留空则采用图片目录）")
-            """
+            images_dir = gr.Textbox(label="图片目录")     
+        with gr.Row():
             with gr.Column(scale=1):
-                use_cache = gr.Checkbox(label="使用缓存",info="如果cache目录内存在同名图片，则不会重新缓存(可能会造成图片显示不一致)")
+                vectorizer_method_list = ["TfidfVectorizer", "CountVectorizer"]
+                vectorizer_method = gr.Dropdown(vectorizer_method_list, label="特征提取", value=vectorizer_method_list[0], type="index")
+            use_comma_tokenizer = gr.Checkbox(label="强制逗号分词", value=True, info="启用后则以逗号划分各个tag。不启用则同时以空格和逗号划分")
+            use_binary_tokenizer = gr.Checkbox(label="tag频率二值化", value=True, info="只考虑是否tag出现而不考虑出现次数")
+            vectorizer_button = gr.Button("确认特征提取", variant="primary")
+    with gr.Box():
         with gr.Row():
             with gr.Accordion("聚类效果分析", open=True):
                 with gr.Row():
@@ -501,7 +526,11 @@ with gr.Blocks(css=css) as demo:
                     )
     with gr.Box():
         with gr.Row():
-            confirmed_cluster_number = gr.Slider(2, MAX_GALLERY_NUMBER, step=1, value=2, label="聚类数")
+            with gr.Column(scale=2):
+                confirmed_cluster_number = gr.Slider(2, MAX_GALLERY_NUMBER, step=1, value=2, label="聚类数")
+            with gr.Column(scale=1):
+                use_cache = gr.Checkbox(label="使用缓存",info="如果cache目录内存在同名图片，则不会重新缓存(可能会造成图片显示不一致)")
+            
             cluster_images_button = gr.Button("开始聚类并展示结果", variant="primary")
     with gr.Row():
         with gr.Accordion("聚类图片展示", open=True):
@@ -515,14 +544,19 @@ with gr.Blocks(css=css) as demo:
                 confirm_cluster_button = gr.Button(value="确认聚类", elem_classes="attention")
             gr_Accordion_and_Gallery_list = create_gr_gallery(MAX_GALLERY_NUMBER)
 
-
+    
+    vectorizer_button.click(fn=vectorizer,
+                            inputs=[images_dir, vectorizer_method, use_comma_tokenizer, use_binary_tokenizer],
+                            outputs=[vectorize_X_and_label_State]
+    )
+    
     cluster_images_button.click(fn=cluster_images,
-                                inputs=[images_dir, confirmed_cluster_number, use_cache, global_dict_State],
+                                inputs=[images_dir, confirmed_cluster_number, use_cache, global_dict_State, vectorize_X_and_label_State],
                                 outputs=gr_Accordion_and_Gallery_list + [confirm_cluster_Row] + [global_dict_State]
     )
 
     cluster_analyse_button.click(fn=cluster_analyse,
-                                 inputs=[images_dir, max_cluster_number],
+                                 inputs=[images_dir, max_cluster_number, vectorize_X_and_label_State],
                                  outputs=[Silhouette_gr_Plot, Elbow_gr_Plot, bset_cluster_number_DataFrame]
     )
     
