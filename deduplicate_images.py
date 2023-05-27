@@ -15,12 +15,18 @@ import os
 from tqdm import tqdm
 from PIL import Image
 import logging
+from typing import Callable, Dict, List, Union, Tuple
 
-choose_image_index = ""
-encodings = {}
-cluster_list = []
-confirmed_images_dir = ""
-images_info_list = []
+# import pandas as pd
+
+choose_image_index = "0:0"  # 用于记录当前点击了画廊哪个图片
+encodings = {}  # 用于记录图片编码
+cluster_list = []  # list[ list[str] ] 用于记录重复图片的聚类结果
+confirmed_images_dir = ""  # 用于记录查重结果对应的文件夹路径，防止使用者更改导致错误
+images_info_list = []  # list[dict] 用于记录重复图片的属性信息
+duplicates = {}  # Dict[str, List] 记录最原始的查重结果，将用于自动选择的启发式算法
+
+
 
 def find_duplicates_images(images_dir: str, use_cache:bool):
     
@@ -35,7 +41,7 @@ def find_duplicates_images(images_dir: str, use_cache:bool):
         # 载入模型
         phasher = PHash()
         # 编码
-        global encodings
+        global encodings, duplicates
         encodings = phasher.encode_images(image_dir=images_dir)
         # 查找重复
         duplicates = phasher.find_duplicates(encoding_map=encodings)
@@ -133,9 +139,14 @@ def find_duplicates_images(images_dir: str, use_cache:bool):
 
 
 def confirm(delet_images_str: str) -> str:
-
-    # 将字符串载入成字典
-    delet_images_dict = toml.loads(delet_images_str)
+    
+    # 尝试将字符串载入成字典
+    try:
+        delet_images_dict = toml.loads(delet_images_str)
+    except Exception as e:
+        toml_error_str = f"{delet_images_str}\n待删除列表toml格式错误，请修正\nerror: {e}"
+        return toml_error_str, gr.update( variant="secondary" ), gr.update( variant="secondary" )
+    
     # 把删除标志如 "0:1" 分成 "0" 和 "1"
     [parent_index_str, son_index_str] = choose_image_index.split(":")[0:2]
 
@@ -151,14 +162,20 @@ def confirm(delet_images_str: str) -> str:
     # 按键名排序
     delet_images_dict = dict(
         sorted(delet_images_dict.items(), key=lambda x: int(x[0])))
-
-    return toml.dumps(delet_images_dict)
+    
+    
+    return toml.dumps(delet_images_dict), gr.update( variant="secondary" ), gr.update( variant='primary' )
 
 
 def cancel(delet_images_str: str) -> str:
     
-    # 将字符串载入成字典
-    delet_images_dict = toml.loads(delet_images_str)
+    # 尝试将字符串载入成字典
+    try:
+        delet_images_dict = toml.loads(delet_images_str)
+    except Exception as e:
+        toml_error_str = f"{delet_images_str}\n待删除列表toml格式错误，请修正\nerror: {e}"
+        return toml_error_str, gr.update( variant="secondary" ), gr.update( variant="secondary" )
+    
     # 把删除标志如 "0:1" 分成 "0" 和 "1"
     [parent_index_str, son_index_str] = choose_image_index.split(":")[0:2]
     # 如果有这个键，就执行操作
@@ -169,9 +186,14 @@ def cancel(delet_images_str: str) -> str:
             # 如果删去后列表为空，则把相应的键一起删了
             if not delet_images_dict[parent_index_str]:
                 delet_images_dict.pop(parent_index_str, None)
-    return toml.dumps(delet_images_dict)
+    
+    # 按钮变色，按谁谁白，另一个红
+    gr_confirm_button = gr.update( variant='primary' )
+    gr_cancel_button = gr.update( variant="secondary" )
+    
+    return toml.dumps(delet_images_dict), gr_confirm_button, gr_cancel_button
 
-def delet(delet_images_str: str):
+def delet(duplicates_images_gallery: Tuple[str, str], delet_images_str: str):
     
     """
     output=[duplicates_images_gallery, delet_images_str]
@@ -184,8 +206,13 @@ def delet(delet_images_str: str):
     if (confirmed_images_dir is None or not confirmed_images_dir) or (cluster_list is None or not cluster_list):
         return [], ""
     
-    #读取待删除列表
-    delet_images_dict = toml.loads(delet_images_str)
+    # 尝试将字符串载入成字典
+    try:
+        delet_images_dict = toml.loads(delet_images_str)
+    except Exception as e:
+        toml_error_str = f"{delet_images_str}\n待删除列表toml格式错误，请修正\nerror: {e}"
+        return duplicates_images_gallery, toml_error_str
+    
     
     #获取待删除图片名字
     need_delet_images_name_list = []
@@ -205,25 +232,64 @@ def delet(delet_images_str: str):
     return [], ""
 
 def auto_select() -> str:
-    """ 用编码再次进行一次查重，由自带的启发式算法找出应该删去的图片 """
-    
-    global encodings, cluster_list
-    
-    if (encodings is None or not encodings) or (cluster_list is None or not cluster_list):
-        return "请先扫描"
+    """
+    由自带的启发式算法找出应该删去的图片
+    https://idealo.github.io/imagededup/user_guide/finding_duplicates/
+    """
     
     """
+    弃用算法
+    
     注意，这里我们又用了一次find_duplicates
     虽然该算法可以启发式找出去重所需最少的图片，但这导致多了一次计算
     或许我们可以用pandas自己写一个启发式算法
     每个图片对应一个索引；建立两个列，一个用于表示重复类标签，一个用于进行重复数投票
     删除被投票大于2的图片即可
-    """
+
+    global encodings, cluster_list
+    
+    if (encodings is None or not encodings) or (cluster_list is None or not cluster_list):
+        return "请先扫描"
+    
     # 载入模型
     phasher = PHash()
     # 启发式算法获得待删除的列表，里面包含了图片名字字符串
     auto_duplicates_list = phasher.find_duplicates_to_remove(encoding_map=encodings)
-
+    """
+    
+    global duplicates, cluster_list
+    
+    if (duplicates is None or not duplicates) or (cluster_list is None or not cluster_list):
+        return "请先扫描"
+    
+    
+    def get_files_to_remove(duplicates: Dict[str, List]) -> List:
+        """
+        来自: https://github.com/idealo/imagededup/blob/4e0b15f4cd82bcfa321eb280b843e57ebc5ff154/imagededup/utils/general_utils.py#L13
+        Get a list of files to remove.
+    
+        Args:
+            duplicates: A dictionary with file name as key and a list of duplicate file names as value.
+    
+        Returns:
+            A list of files that should be removed.
+        """
+        # iterate over dict_ret keys, get value for the key and delete the dict keys that are in the value list
+        files_to_remove = set()
+    
+        for k, v in duplicates.items():
+            tmp = [
+                i[0] if isinstance(i, tuple) else i for i in v
+            ]  # handle tuples (image_id, score)
+    
+            if k not in files_to_remove:
+                files_to_remove.update(tmp)
+    
+        return list(files_to_remove)
+    
+    auto_duplicates_list = get_files_to_remove(duplicates)
+    
+    
     # 定义一个空字典来存储映射关系
     mapping = {}
     # 遍历cluster_list中的每个集合
@@ -244,15 +310,56 @@ def auto_select() -> str:
 
     return toml.dumps(result)
 
+def all_select() -> str:
+    """ 根据cluster_list的重复图片分类及数量选择全部图片 """
+    
+    global cluster_list
+    
+    if cluster_list is None or not cluster_list:
+        return "请先扫描"
+    
+    # 生成类似
+    # {"1":[0,1,2],
+    #  "2":[0,1],
+    #  ...
+    #  }
+    result = { f"{parent_index}":list( range(len(cluster)) )  for parent_index, cluster in enumerate( cluster_list ) }
+    
+    return toml.dumps(result)
 
-def get_choose_image_index(evt: gr.SelectData):
+
+def get_choose_image_index(evt: gr.SelectData, delet_images_str: str):
     # evt.value 为标签 ；evt.index 为图片序号； evt.target 为调用组件名
     global choose_image_index, images_info_list 
     
+    # 获取图片属性信息
     choose_image_index = evt.value
     image_info_json = images_info_list[evt.index]
     
-    return f"选择 {evt.value}", f"取消 {evt.value}", image_info_json
+    # 尝试判断所浏览的图片是否已经在待删除列表中
+    # 如果是则为选择按钮标红，如果不是则取消按钮标红
+    flag = (0,0)
+    parent_index, son_index = evt.value.split(":")
+    try:
+        delet_images_dict = toml.loads(delet_images_str)
+
+        if int(son_index) in delet_images_dict.get( str(parent_index), []):
+            flag = (0,1)
+        else:
+            flag = (1,0)
+    except Exception as e:
+        logging.error(f"待删除列表无法以toml格式读取  error: {e}")
+   
+    def variant(flag: int):
+        if flag==1:
+            return 'primary'
+        else:
+            return "secondary" 
+
+    gr_confirm_button = gr.update( value=f"选择 {evt.value}", variant=variant(flag[0]) )
+    gr_cancel_button = gr.update( value=f"取消 {evt.value}", variant=variant(flag[1]) )
+    
+    return gr_confirm_button, gr_cancel_button, image_info_json
 
 
 with gr.Blocks(css="#delet_button {color: red}") as demo:
@@ -274,7 +381,8 @@ with gr.Blocks(css="#delet_button {color: red}") as demo:
         with gr.Column(scale=1):
             delet_button = gr.Button("删除（不可逆）", elem_id="delet_button")
             auto_select_button = gr.Button("自动选择")
-            delet_images_str = gr.Textbox(label="待删除列表")
+            all_select_button = gr.Button("全部选择")
+            delet_images_str = gr.Textbox(label="待删除列表（手动编辑时请保证toml格式的正确）")
 
     # 按下后，在指定的目录搜索重复图像，并返回带标签的重复图像路径
     find_duplicates_images_button.click(fn=find_duplicates_images,
@@ -284,25 +392,25 @@ with gr.Blocks(css="#delet_button {color: red}") as demo:
 
     # 点击一个图片后，记录该图片标签于全局变量choose_image_index，并且把按钮更名为该标签;同时显示该图片分辨率等信息
     duplicates_images_gallery.select(fn=get_choose_image_index,
-                                     inputs=[],
+                                     inputs=[delet_images_str],
                                      outputs=[confirm_button, cancel_button, image_info_json]
                                      )
 
-    # 按下后，将全局变量choose_image_index中的值加到列表中
+    # 按下后，将全局变量choose_image_index中的值加到列表中,同时将取消按钮变红
     confirm_button.click(fn=confirm,
                          inputs=[delet_images_str],
-                         outputs=[delet_images_str]
+                         outputs=[delet_images_str, confirm_button, cancel_button]
                          )
 
-    # 按下后，将全局变量choose_image_index中的值从列表中删除
+    # 按下后，将全局变量choose_image_index中的值从列表中删除,同时将选择按钮变红
     cancel_button.click(fn=cancel,
                         inputs=[delet_images_str],
-                        outputs=[delet_images_str]
+                        outputs=[delet_images_str, confirm_button, cancel_button]
                         )
     
     # 按下后，删除指定的图像，并更新画廊
     delet_button.click(fn=delet,
-                       inputs=[delet_images_str],
+                       inputs=[duplicates_images_gallery, delet_images_str],
                        outputs=[duplicates_images_gallery, delet_images_str]
                        )
     
@@ -311,6 +419,11 @@ with gr.Blocks(css="#delet_button {color: red}") as demo:
                              inputs=[],
                              outputs=[delet_images_str]
                             )
-
+    # 按下后，选择全部图片
+    all_select_button.click(fn=all_select,
+                            inputs=[],
+                            outputs=[delet_images_str]
+                            )
+    
 if __name__ == "__main__":
     demo.launch(debug=True, inbrowser=True)
