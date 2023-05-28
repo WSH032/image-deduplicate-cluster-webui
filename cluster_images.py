@@ -8,7 +8,7 @@ Created on Fri May  5 17:38:31 2023
 # 导入所需的库
 import sklearn.cluster as skc
 import sklearn.feature_extraction.text as skt
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import silhouette_score, davies_bouldin_score
 from sklearn.inspection import permutation_importance
 from sklearn.feature_selection import chi2, mutual_info_regression, mutual_info_classif, f_classif, SelectPercentile, SelectKBest
 from sklearn.decomposition import TruncatedSVD
@@ -44,7 +44,12 @@ def comma_tokenizer(text: str) -> List[str]:
     return [tag.strip() for tag in text.split(',')]
 
 
-def vectorizer(images_dir: str, vectorizer_method: int, use_comma_tokenizer: bool, use_binary_tokenizer: bool):
+def vectorizer(images_dir: str,
+               vectorizer_method: int,
+               use_comma_tokenizer: bool,
+               use_binary_tokenizer: bool,
+               cluster_model: int
+):
     """
     读取images_dir下的图片或tags文本，用其生成特征向量
     
@@ -55,6 +60,8 @@ def vectorizer(images_dir: str, vectorizer_method: int, use_comma_tokenizer: boo
         2 使用WD14
     use_comma_tokenizer对于前两种方法使用逗号分词器comma_tokenizer
     use_binary_tokenizer对于前两种方法使用binary参数
+    cluster_model为聚类模型
+        0，1，2...等分别对应不同的聚类模型
     
     return vectorize_X_and_label_State=[X, tf_tags_list]
     """
@@ -83,15 +90,67 @@ def vectorizer(images_dir: str, vectorizer_method: int, use_comma_tokenizer: boo
     # 被过滤的tag
     # stop_tags = tfvec.stop_words_
     
-    return [X, tf_tags_list]
+
+    """
+    已经弃用尝试继承类
+    parent_class_list = [skc.KMeans, skc.SpectralClustering, skc.AgglomerativeClustering, skc.OPTICS]
+    
+    class ClusterModel(object):
+        
+        def __init__(self, model_index: int=0):
+            # cluster_model_list = ["K-Means聚类", "Spectral谱聚类", "Agglomerative层次聚类", "OPTICS聚类"]
+            def _get_modl(model_index):
+                if model_index == 0 :
+                    cluster_model_State = skc.KMeans()
+                elif model_index == 1 :
+                    cluster_model_State = skc.SpectralClustering( affinity='cosine' )
+                elif model_index == 2 :
+                    cluster_model_State = skc.AgglomerativeClustering( affinity='cosine', linkage='average' )
+                elif model_index == 3 :
+                    cluster_model_State = skc.OPTICS( metric="cosine")
+                return cluster_model_State
+            
+            self.cluster_model_State = _get_modl(model_index)  # 存放模型
+            self.model_index = model_index  # 存放模型序号，用于确认存放的是哪一种模型，方便设置n值
+        
+        def set_n(self, n: int=2):
+            # 如果不为3，即不为OPTICS，则其他模型都可以直接用n_clusters参数
+            if not self.model_index == 3 :
+                self.cluster_model_State.set_params(n_clusters=n)
+            # 如果为3，即OPTICS，要使用min_samples参数
+            else:
+                self.cluster_model_State.set_params(min_samples=n)
+            return self
+    """
+    
+    
+    def _get_modl(model_index):
+        if model_index == 0 :
+            cluster_model_State = skc.KMeans()
+        elif model_index == 1 :
+            cluster_model_State = skc.SpectralClustering( affinity='cosine' )
+        elif model_index == 2 :
+            cluster_model_State = skc.AgglomerativeClustering( affinity='cosine', linkage='average' )
+        elif model_index == 3 :
+            cluster_model_State = skc.OPTICS( metric="cosine")
+        return cluster_model_State
+    cluster_model_State = _get_modl(cluster_model)
+    
+    return [X, tf_tags_list], cluster_model_State, "预处理完成"
     
 
 
-def cluster_images(images_dir: str, confirmed_cluster_number: int, use_cache: bool, global_dict_State: dict, vectorize_X_and_label_State: list) -> list:
+def cluster_images(images_dir: str,
+                   confirmed_cluster_number: int,
+                   use_cache: bool,
+                   global_dict_State: dict,
+                   vectorize_X_and_label_State: list,
+                   cluster_model_State,
+) -> list:
     """
     对指定目录下的图片进行聚类，将会使用该目录下与图片同名的txt中的tag做为特征
     confirmed_cluster_number为指定的聚类数
-    如果use_bool，则会把图片拷贝到指定目录下的cache文件夹，并显示缩略图
+    如果use_cache为真，则会把图片拷贝到指定目录下的cache文件夹，并显示缩略图
     """
     
     # 实例化搜索器
@@ -118,12 +177,21 @@ def cluster_images(images_dir: str, confirmed_cluster_number: int, use_cache: bo
     """
     
     # 聚类，最大聚类数不能超过样本数
+    
     n_clusters = min( confirmed_cluster_number, len(tags_list) )
-    kmeans_model = skc.KMeans( n_clusters=n_clusters )  # 创建K-Means模型
-    # kmeans_model = skc.SpectralClustering( n_clusters=n_clusters, affinity='cosine' )  # 谱聚类模型
-    # kmeans_model = skc.AgglomerativeClustering( n_clusters=n_clusters, affinity='cosine', linkage='average' )  # 层次聚类
-    # kmeans_model = skc.OPTICS(min_samples=n_clusters, metric="cosine")
-    y_pred = kmeans_model.fit_predict(X) # 训练模型并得到聚类结果
+    cluster_model = cluster_model_State
+    
+    # 根据模型的不同设置不同的参数n
+    if "n_clusters" in cluster_model.get_params().keys():
+        cluster_model.set_params(n_clusters=n_clusters)
+    elif "min_samples" in cluster_model.get_params().keys():
+        cluster_model.set_params(min_samples=n_clusters)
+    else:
+        logging.error("选择的模型中，n参数指定出现问题")
+    
+    print("聚类算法", type(cluster_model).__name__)
+    
+    y_pred = cluster_model.fit_predict(X) # 训练模型并得到聚类结果
     print(y_pred)
     # centers = kmeans_model.cluster_centers_  #kmeans模型的聚类中心，用于调试和pandas计算，暂不启用
     
@@ -131,7 +199,7 @@ def cluster_images(images_dir: str, confirmed_cluster_number: int, use_cache: bo
     """
     特征重要性分析，计算量太大，不启用
     t1 = datetime.now()
-    permutation_importance(kmeans_model, X, y_pred, n_jobs=-1)
+    permutation_importance(cluster_model, X, y_pred, n_jobs=-1)
     t2 = datetime.now()
     print(t2-t1)
     """
@@ -286,7 +354,7 @@ def cluster_images(images_dir: str, confirmed_cluster_number: int, use_cache: bo
     return visible_gr_gallery_list + unvisible_gr_gallery_list + [gr.update(visible=True)] + [global_dict_State]
 
 
-def cluster_analyse(images_dir: str, max_cluster_number: int, vectorize_X_and_label_State:list):
+def cluster_analyse(images_dir: str, max_cluster_number: int, vectorize_X_and_label_State:list, cluster_model_State):
     """
     读取指定路径下的图片，并依据与图片同名的txt内的tags进行聚类
     将评估从聚类数从 2~max_cluster_number 的效果
@@ -306,32 +374,80 @@ def cluster_analyse(images_dir: str, max_cluster_number: int, vectorize_X_and_la
     X = vectorize_X_and_label_State[0]  # 向量特征
     
     # 使用肘部法则和轮廓系数确定最优的聚类数
-    wss = [] # 存储每个聚类数对应的簇内平方和
-    silhouette_scores = []  # 用于存储不同k值对应的轮廓系数
+    davies_bouldin_scores_list = [] # 存储每个聚类数对应的davies系数
+    silhouette_scores_list = []  # 用于存储不同k值对应的轮廓系数
     
     # 最大聚类数不能超过样本,最多只能样本数-1
-    k_range = range( 1, min(max_cluster_number+1, len(tags_list) ) ) # 聚类数的范围(左闭右开)
+    k_range = range( 2, min(max_cluster_number+1, len(tags_list) ) ) # 聚类数的范围(左闭右开)
     
     print("聚类分析开始")
     for k in tqdm(k_range):
-        kmeans_model = skc.KMeans(n_clusters=k) # 创建K-Means模型
-        y_pred = kmeans_model.fit_predict(X) # 训练模型
-        wss.append(kmeans_model.inertia_) # 计算并存储簇内平方和
-        score = silhouette_score(X, y_pred) if k != 1 else None  # 计算轮廓系数,聚类数为1时无法计算
-        silhouette_scores.append(score) # 储存轮廓系数
+        cluster_model = cluster_model_State # 获取模型
+        
+        # 根据模型的不同设置不同的参数n
+        if "n_clusters" in cluster_model.get_params().keys():
+            cluster_model.set_params(n_clusters=k)
+        elif "min_samples" in cluster_model.get_params().keys():
+            cluster_model.set_params(min_samples=k)
+        else:
+            logging.error("选择的模型中，n参数指定出现问题")
+        
+        y_pred = cluster_model.fit_predict(X) # 训练模型
+        
+        # 如果出现只有一个聚类的情况，或者每一个图片都自成一类，就不用继续分析了
+        if len( np.unique(y_pred) ) == 1 or len( np.unique(y_pred) ) == len(X):
+            break
+          
+        sil_score = silhouette_score(X, y_pred)  # 计算轮廓系数,聚类数为1时无法计算
+        silhouette_scores_list.append(sil_score) # 储存轮廓系数
+        
+        dav_score= davies_bouldin_score(X,y_pred)  # 计算davies系数
+        davies_bouldin_scores_list.append(dav_score) # 储存
     
-    Silhouette_DataFrame = pd.DataFrame( {"x":k_range, "y":silhouette_scores} )
-    Elbow_DataFrame = pd.DataFrame( {"x":k_range, "y":wss} )
+    print("分析算法", type(cluster_model).__name__)
+    
+    Silhouette_df = pd.DataFrame( {"x":k_range[0:len(silhouette_scores_list)], "y":silhouette_scores_list} )
+    # 注意，这里Davies_df的y值做了一次非线性映射，0 -> 1 ; +inf -> -1
+    # Davies_df = pd.DataFrame( {"x":k_range[0:len(davies_bouldin_scores_list)], "y":(1 - 4*np.arctan(davies_bouldin_scores_list) / np.pi) } )
+    Davies_df = pd.DataFrame( {"x":k_range[0:len(davies_bouldin_scores_list)], "y":( -1 * np.array(davies_bouldin_scores_list) ) } )
+    
+    print(davies_bouldin_scores_list)
+    print(Davies_df.loc[:,"y"])
+    
+    Silhouette_LinePlot = gr.update(value=Silhouette_df,
+                                    label="轮廓系数",
+                                    x="x",
+                                    y="y",
+                                    tooltip=["x", "y"],
+                                    x_title="Number of clusters",
+                                    y_title="Silhouette score",
+                                    title="Silhouette Method",
+                                    overlay_point=True,
+                                    width=400,
+    )
+    Davies_LinePlot = gr.update(value=Davies_df,
+                                    label="Davies-Bouldin指数",
+                                    x="x",
+                                    y="y",
+                                    tooltip=["x", "y"],
+                                    x_title="Number of clusters",
+                                    y_title="-1 * np.array(davies_bouldin_scores_list)",
+                                    title="Davies-Bouldin Method",
+                                    overlay_point=True,
+                                    width=400,
+    )
+    
     
     final_clusters_number = len( np.unique(y_pred) )  # 实际最大聚类数
     head_number = max( 1, min( 10, round( math.log2(final_clusters_number) ) ) )  # 展示log2(实际聚类数)个，最少要展示1个，最多展示10个
+    
     # 对轮廓系数从大到小排序，展示前head_number个
-    bset_cluster_number_DataFrame = Silhouette_DataFrame.sort_values(by='y', ascending=False).head(head_number)
+    bset_cluster_number_DataFrame = Silhouette_df.sort_values(by='y', ascending=False).head(head_number)
     
     """
     from kneed import KneeLocator
     自动找拐点，在聚类数大了后效果不好，不再使用
-    kl = KneeLocator(k_range, wss, curve="convex", direction="decreasing")
+    kl = KneeLocator(k_range, davies_bouldin_scores_list, curve="convex", direction="decreasing")
     kl.plot_knee()
     print( round(kl.elbow, 3) )
     """
@@ -339,7 +455,7 @@ def cluster_analyse(images_dir: str, max_cluster_number: int, vectorize_X_and_la
     print("聚类分析结束")
     
     # 绘制肘部曲线
-    return Silhouette_DataFrame, Elbow_DataFrame, gr.update(value=bset_cluster_number_DataFrame,visible=True)
+    return Silhouette_LinePlot, Davies_LinePlot, gr.update(value=bset_cluster_number_DataFrame,visible=True)
 
 
 def create_gr_gallery(max_gallery_number: int) -> list:
@@ -483,6 +599,8 @@ with gr.Blocks(css=css) as demo:
     
     with gr.Box():
         vectorize_X_and_label_State = gr.State(value=[])  # 用于存放特征向量，和其对应的tag
+        cluster_model_State = gr.State()  # 用于存放预处理中生成的聚类模型
+        preprocess_Markdown = gr.Markdown("**请先进行预处理再聚类**")
         with gr.Row():
             images_dir = gr.Textbox(label="图片目录")     
         with gr.Row():
@@ -491,34 +609,19 @@ with gr.Blocks(css=css) as demo:
                 vectorizer_method = gr.Dropdown(vectorizer_method_list, label="特征提取", value=vectorizer_method_list[0], type="index")
             use_comma_tokenizer = gr.Checkbox(label="强制逗号分词", value=True, info="启用后则以逗号划分各个tag。不启用则同时以空格和逗号划分")
             use_binary_tokenizer = gr.Checkbox(label="tag频率二值化", value=True, info="只考虑是否tag出现而不考虑出现次数")
-            vectorizer_button = gr.Button("确认特征提取", variant="primary")
+            vectorizer_button = gr.Button("确认预处理", variant="primary")
+        with gr.Row():
+                cluster_model_list = ["K-Means聚类", "Spectral谱聚类", "Agglomerative层次聚类", "OPTICS聚类"]
+                cluster_model = gr.Dropdown(cluster_model_list, label="聚类模型", value=cluster_model_list[0], type="index")
     with gr.Box():
         with gr.Row():
             with gr.Accordion("聚类效果分析", open=True):
                 with gr.Row():
-                    max_cluster_number = gr.Slider(2, MAX_GALLERY_NUMBER, step=1, value=10, label="分析时最大聚类数")
+                    max_cluster_number = gr.Slider(2, MAX_GALLERY_NUMBER, step=1, value=10, label="分析时最大聚类数 / OPTICS-min_samples")
                     cluster_analyse_button = gr.Button("开始分析")
                 with gr.Row():
-                    Silhouette_gr_Plot = gr.LinePlot(label="轮廓系数",
-                                                     x="x",
-                                                     y="y",
-                                                     tooltip=["x", "y"],
-                                                     x_title="Number of clusters",
-                                                     y_title="Silhouette score",
-                                                     title="Silhouette Method",
-                                                     overlay_point=True,
-                                                     width=400,
-                    )
-                    Elbow_gr_Plot = gr.LinePlot(label="肘部曲线",
-                                                x="x",
-                                                y="y",
-                                                tooltip=["x", "y"],
-                                                x_title="Number of clusters",
-                                                y_title="Within-cluster sum of squares",
-                                                title="Elbow Method",
-                                                overlay_point=True,
-                                                width=400,
-                    )
+                    Silhouette_gr_Plot = gr.LinePlot()
+                    Davies_gr_Plot = gr.LinePlot()
                 with gr.Row():
                     bset_cluster_number_DataFrame = gr.DataFrame(value=[],
                                                                  label="根据轮廓曲线推荐的聚类数（y越大越好）",
@@ -527,7 +630,7 @@ with gr.Blocks(css=css) as demo:
     with gr.Box():
         with gr.Row():
             with gr.Column(scale=2):
-                confirmed_cluster_number = gr.Slider(2, MAX_GALLERY_NUMBER, step=1, value=2, label="聚类数")
+                confirmed_cluster_number = gr.Slider(2, MAX_GALLERY_NUMBER, step=1, value=2, label="聚类数n_cluster / OPTICS-min_samples")
             with gr.Column(scale=1):
                 use_cache = gr.Checkbox(label="使用缓存",info="如果cache目录内存在同名图片，则不会重新缓存(可能会造成图片显示不一致)")
             
@@ -544,22 +647,29 @@ with gr.Blocks(css=css) as demo:
                 confirm_cluster_button = gr.Button(value="确认聚类", elem_classes="attention")
             gr_Accordion_and_Gallery_list = create_gr_gallery(MAX_GALLERY_NUMBER)
 
-    
+    # 特征提取与模型选择
     vectorizer_button.click(fn=vectorizer,
-                            inputs=[images_dir, vectorizer_method, use_comma_tokenizer, use_binary_tokenizer],
-                            outputs=[vectorize_X_and_label_State]
+                            inputs=[images_dir, vectorizer_method, use_comma_tokenizer, use_binary_tokenizer, cluster_model],
+                            outputs=[vectorize_X_and_label_State, cluster_model_State, preprocess_Markdown]
     )
-    
+    # 聚类图像
     cluster_images_button.click(fn=cluster_images,
-                                inputs=[images_dir, confirmed_cluster_number, use_cache, global_dict_State, vectorize_X_and_label_State],
+                                inputs=[images_dir,
+                                        confirmed_cluster_number,
+                                        use_cache, global_dict_State,
+                                        vectorize_X_and_label_State,
+                                        cluster_model_State],
                                 outputs=gr_Accordion_and_Gallery_list + [confirm_cluster_Row] + [global_dict_State]
     )
-
+    # 聚类分析
     cluster_analyse_button.click(fn=cluster_analyse,
-                                 inputs=[images_dir, max_cluster_number, vectorize_X_and_label_State],
-                                 outputs=[Silhouette_gr_Plot, Elbow_gr_Plot, bset_cluster_number_DataFrame]
+                                 inputs=[images_dir,
+                                         max_cluster_number,
+                                         vectorize_X_and_label_State,
+                                         cluster_model_State],
+                                 outputs=[Silhouette_gr_Plot, Davies_gr_Plot, bset_cluster_number_DataFrame]
     )
-    
+    # 确定聚类
     confirm_cluster_button.click(fn=confirm_cluster,
                                  inputs=[process_clusters_method, global_dict_State],
                                  outputs=[confirm_cluster_Row],
