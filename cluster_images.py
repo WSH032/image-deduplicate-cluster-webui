@@ -19,6 +19,7 @@ import numpy as np
 import gradio as gr
 from scipy.cluster.hierarchy import linkage, dendrogram
 from SearchImagesTags import SearchImagesTags
+import tag_images_by_wd14_tagger as tagger
 from tqdm import tqdm
 from PIL import Image
 from typing import Callable, List
@@ -32,6 +33,37 @@ import logging
 
 MAX_GALLERY_NUMBER = 100  # 画廊里展示的最大聚类数量为100
 CACHE_RESOLUTION = 256  # 缓存图片时最大分辨率
+
+
+#  -> List[ List[np.array, np.array], List[str] ] 
+def WD14tagger(force_images_list: List[str]):
+    
+    train_data_dir = "no_need"  # 实际不重要，因为已经传入了force_images_list
+    repo_id = "SmilingWolf/wd-v1-4-moat-tagger-v2"
+    model_dir = r"E:\GitHub\image-deduplicate-cluster-webui\wd14_tagger_model"
+    batch_size = 8
+    max_data_loader_n_workers = 2
+    caption_extension = ".txt"
+    general_threshold = 0.35
+    character_threshold = 0.35
+    force_images_list = force_images_list
+    
+    cmd_params_list = [train_data_dir,
+                        f"--repo_id={repo_id}",
+                        f"--model_dir={model_dir}",
+                        f"--batch_size={batch_size}",
+                        f"--max_data_loader_n_workers={max_data_loader_n_workers}",
+                        f"--caption_extension={caption_extension}",
+                        f"--general_threshold={general_threshold}",
+                        f"--character_threshold={character_threshold}",
+    ]
+    
+    parser = tagger.setup_parser()
+    args = parser.parse_args( cmd_params_list )
+    
+    args.force_images_list = force_images_list
+    
+    return tagger.main(args)
 
 
 # 逗号分词器
@@ -65,30 +97,52 @@ def vectorizer(images_dir: str,
     
     return vectorize_X_and_label_State=[X, tf_tags_list]
     """
-    
-    # 选择特征提取器
-    vectorizer_args_dict = dict(tokenizer=comma_tokenizer if use_comma_tokenizer else None,
-                                binary=use_binary_tokenizer,
-                                max_df=0.99)
-    if vectorizer_method == 0 :
-        tfvec = skt.TfidfVectorizer(**vectorizer_args_dict)
-    elif vectorizer_method == 1 :
-        tfvec = skt.CountVectorizer(**vectorizer_args_dict)
-    
-    
+
+
+
     # 实例化搜索器
     searcher = SearchImagesTags(images_dir, tag_file_ext=".txt")
-    # 读取图片名字， 用WD14
-    image_files_list = searcher.image_files()
-    # tag内容, 用于文本提取
-    tag_content_list = searcher.tag_content(error_then_tag_is="_no_tag")
+
+    # 文本提取器参数
+    vectorizer_args_dict = dict(tokenizer=comma_tokenizer if use_comma_tokenizer else None,
+                                    binary=use_binary_tokenizer,
+                                    max_df=0.99)
     
+    if vectorizer_method in (0,1):
+
+        # 选择特征提取器
+        
+        if vectorizer_method == 0 :
+            tfvec = skt.TfidfVectorizer(**vectorizer_args_dict)
+        elif vectorizer_method == 1 :
+            tfvec = skt.CountVectorizer(**vectorizer_args_dict)
+
+        # tag内容, 用于文本提取
+        tag_content_list = searcher.tag_content(error_then_tag_is="_no_tag")
+        
+        # tags转为向量特征
+        X = tfvec.fit_transform(tag_content_list).toarray()  # type: ignore # 向量特征
+        tf_tags_list = tfvec.get_feature_names_out()  # 向量每列对应的tag
+        # 被过滤的tag
+        # stop_tags = tfvec.stop_words_
     
-    # tags转为向量特征
-    X = tfvec.fit_transform(tag_content_list).toarray()  # 向量特征
-    tf_tags_list = tfvec.get_feature_names_out()  # 向量每列对应的tag
-    # 被过滤的tag
-    # stop_tags = tfvec.stop_words_
+    elif vectorizer_method == 2 :
+        # 读取图片名字， 用WD14
+        image_files_list = searcher.image_files()
+        
+        temp = WD14tagger( [ os.path.join(images_dir, name) for name in image_files_list] ) 
+        X =  temp[0] # 向量特征组，List[np.array, np.array], 第一个是入口层，第二个是输出层
+        tf_tags_list = temp[1]  # 向量每列对应的tag
+        
+    else:
+        logging.error("特征提取方法选择出错， 默认选择 tfidf 提取方法")
+        tfvec = skt.TfidfVectorizer(**vectorizer_args_dict)
+        # tag内容, 用于文本提取
+        tag_content_list = searcher.tag_content(error_then_tag_is="_no_tag")
+        # tags转为向量特征
+        X = tfvec.fit_transform(tag_content_list).toarray()  # type: ignore # 向量特征
+        tf_tags_list = tfvec.get_feature_names_out()  # 向量每列对应的tag
+        
     
 
     """
@@ -124,19 +178,27 @@ def vectorizer(images_dir: str,
     """
     
     
-    def _get_modl(model_index):
+    def _get_model(model_index):
         if model_index == 0 :
-            cluster_model_State = skc.KMeans()
+            cluster_model_State = skc.KMeans(n_init=7)
         elif model_index == 1 :
             cluster_model_State = skc.SpectralClustering( affinity='cosine' )
         elif model_index == 2 :
-            cluster_model_State = skc.AgglomerativeClustering( affinity='cosine', linkage='average' )
+            cluster_model_State = skc.AgglomerativeClustering( metric='cosine', linkage='average' )
         elif model_index == 3 :
             cluster_model_State = skc.OPTICS( metric="cosine")
+        else:
+            raise ValueError(f"聚类模型选择出错,错误值为: {model_index}")
         return cluster_model_State
-    cluster_model_State = _get_modl(cluster_model)
+    cluster_model_State = _get_model(cluster_model)
     
-    return [X, tf_tags_list], cluster_model_State, "预处理完成"
+    title_str = (" " * 3) + \
+                f"特征维度: {  X.shape if isinstance(X, np.ndarray) else [i.shape for i in X] }" + \
+                (" " * 3) + \
+                f"tag数量: {len(tf_tags_list)}"
+    
+
+    return [X, tf_tags_list], cluster_model_State, "预处理完成" + title_str
     
 
 
@@ -156,17 +218,22 @@ def cluster_images(images_dir: str,
     # 实例化搜索器
     searcher = SearchImagesTags(images_dir, tag_file_ext=".txt")
     # 读取图片名字，tag内容
-    image_files_list = searcher.image_files()
-    tag_content_list = searcher.tag_content(error_then_tag_is="_no_tag")
-    images_and_tags_tuple = tuple( zip( image_files_list, tag_content_list ) )
+    images_files_list = searcher.image_files()
     
     
-    # 获取文件名列表和tags列表
-    images_files_list = [image for image, _ in images_and_tags_tuple]
-    tags_list = [tags for _, tags in images_and_tags_tuple]
+    # 如果是个list，说明用了WD1.4tagger
+    # 注意此时有两个特征向量，第一个为入口层，第二个为出口层
+    # 第一个特征为入口层降维向量，特征数量可能与tags数不一样
+    # 第二个特征是出口的向量，特征数量与tags数一直
+    # 所以此处的X在预测完后，要在特征重要性分析之前换为出口向量
+    if isinstance(vectorize_X_and_label_State[0], list):
+        X = vectorize_X_and_label_State[0][0]
+    # 如果是个np，说明没用WD1.4tagger
+    elif isinstance(vectorize_X_and_label_State[0], np.ndarray):
+        X = vectorize_X_and_label_State[0]
+    else:
+        raise TypeError("vectorize_X_and_label_State[0]的类型不对, 其类型目前为 : {type(vectorize_X_and_label_State[0])}")
     
-    # tags转为向量特征
-    X = vectorize_X_and_label_State[0]  # 向量特征
     tf_tags_list = vectorize_X_and_label_State[1]  # 向量每列对应的tag
 
     
@@ -177,8 +244,8 @@ def cluster_images(images_dir: str,
     """
     
     # 聚类，最大聚类数不能超过样本数
-    
-    n_clusters = min( confirmed_cluster_number, len(tags_list) )
+    # 如果X是个二维矩阵，len(X)应该能获取行数，即样本数
+    n_clusters = min( confirmed_cluster_number, len(X) )
     cluster_model = cluster_model_State
     
     # 根据模型的不同设置不同的参数n
@@ -190,11 +257,18 @@ def cluster_images(images_dir: str,
         logging.error("选择的模型中，n参数指定出现问题")
     
     print("聚类算法", type(cluster_model).__name__)
+    if isinstance(X, np.ndarray):
+        print(f"预测特征维度 : {X.shape}")
     
     y_pred = cluster_model.fit_predict(X) # 训练模型并得到聚类结果
     print(y_pred)
     # centers = kmeans_model.cluster_centers_  #kmeans模型的聚类中心，用于调试和pandas计算，暂不启用
     
+    # 如果是个list，说明用了WD1.4tagger
+    # 第一个特征为入口层降维向量，特征数量可能与tags数不一样
+    # 所以此处的X在预测完后，要在特征重要性分析之前换为出口向量
+    if isinstance(vectorize_X_and_label_State[0], list):
+        X = vectorize_X_and_label_State[0][1]
     
     """
     特征重要性分析，计算量太大，不启用
@@ -300,12 +374,14 @@ def cluster_images(images_dir: str,
             cluster_feature_tags_list.append( {"prompt":prompt_tags_list, "negetive":negetive_tags_list} )
             
         return cluster_feature_tags_list
-
+    
+    if isinstance(X, np.ndarray):
+        print(f"重要性分析特征维度 : {X.shape}")
     cluster_feature_tags_list = _cluster_feature_select(clusters_ID, X, y_pred, pred_df)
     
 
     # 赋值到全局组件中，将会传递至confirm_cluster_button.click
-    global_dict_State["common_duplicate_tags_set"] = common_duplicate_tags_set
+    global_dict_State["common_duplicate_tags_set"] = common_duplicate_tags_set  # 好像弃用了？
     global_dict_State["cluster_feature_tags_list"] = cluster_feature_tags_list
     global_dict_State["clustered_images_list"] = clustered_images_list
     global_dict_State["images_dir"] = images_dir
@@ -361,6 +437,8 @@ def cluster_analyse(images_dir: str, max_cluster_number: int, vectorize_X_and_la
     返回matplotlib类型的肘部曲线和轮廓系数
     """
     
+    """
+    弃用
     # 实例化搜索器
     searcher = SearchImagesTags(images_dir, tag_file_ext=".txt")
     # 读取图片名字，tag内容
@@ -369,19 +447,41 @@ def cluster_analyse(images_dir: str, max_cluster_number: int, vectorize_X_and_la
     images_and_tags_tuple = tuple( zip( image_files_list, tag_content_list ) )
     
     tags_list = [tags for _, tags in images_and_tags_tuple]
+    """
     
     # 提取特征标签
-    X = vectorize_X_and_label_State[0]  # 向量特征
+    # 如果是个list，说明用了WD1.4tagger
+    # 注意此时有两个特征向量，第一个为入口层，第二个为出口层
+    # 第一个特征为入口层降维向量，特征数量可能与tags数不一样
+    # 第二个特征是出口的向量，特征数量与tags数一直
+    # 这里不进行特征重要性分析，也不涉及到特征与tag一一对应，所以可以不变为出口向量
+    if isinstance(vectorize_X_and_label_State[0], list):
+        X = vectorize_X_and_label_State[0][0]
+    # 如果是个np，说明没用WD1.4tagger
+    elif isinstance(vectorize_X_and_label_State[0], np.ndarray):
+        X = vectorize_X_and_label_State[0]
+    else:
+        raise TypeError(f"vectorize_X_and_label_State[0] 为未知的类型  { type(vectorize_X_and_label_State[0]) }")
+
+    
+    if isinstance(X, np.ndarray):
+        print(f"n值分析特征维度 : {X.shape}")
     
     # 使用肘部法则和轮廓系数确定最优的聚类数
     davies_bouldin_scores_list = [] # 存储每个聚类数对应的davies系数
     silhouette_scores_list = []  # 用于存储不同k值对应的轮廓系数
     
     # 最大聚类数不能超过样本,最多只能样本数-1
-    k_range = range( 2, min(max_cluster_number+1, len(tags_list) ) ) # 聚类数的范围(左闭右开)
-    
+    # 如果X是个二维矩阵，len(X)应该能获取行数，即样本数
+    print(f"最大样本数 {len(X)}")
+    if len(X) < 3:
+        raise ValueError("样本数过少，无法进行聚类分析")
+    k_range = range( 2, min(max_cluster_number+1, len(X) ) )  # 聚类数的范围(左闭右开)
+
+    final_clusters_number = 0  # 最终的聚类的次数
+
     print("聚类分析开始")
-    for k in tqdm(k_range):
+    for k in tqdm( k_range ):
         cluster_model = cluster_model_State # 获取模型
         
         # 根据模型的不同设置不同的参数n
@@ -403,17 +503,19 @@ def cluster_analyse(images_dir: str, max_cluster_number: int, vectorize_X_and_la
         
         dav_score= davies_bouldin_score(X,y_pred)  # 计算davies系数
         davies_bouldin_scores_list.append(dav_score) # 储存
+
+        final_clusters_number += 1  # 记录最终的聚类数
     
-    print("分析算法", type(cluster_model).__name__)
+    print("分析算法", type(cluster_model_State).__name__)
     
     Silhouette_df = pd.DataFrame( {"x":k_range[0:len(silhouette_scores_list)], "y":silhouette_scores_list} )
     # 注意，这里Davies_df的y值做了一次非线性映射，0 -> 1 ; +inf -> -1
     # Davies_df = pd.DataFrame( {"x":k_range[0:len(davies_bouldin_scores_list)], "y":(1 - 4*np.arctan(davies_bouldin_scores_list) / np.pi) } )
     Davies_df = pd.DataFrame( {"x":k_range[0:len(davies_bouldin_scores_list)], "y":( -1 * np.array(davies_bouldin_scores_list) ) } )
     
-    print(davies_bouldin_scores_list)
-    print(Davies_df.loc[:,"y"])
-    
+    _df = pd.concat( [ Silhouette_df.loc[:,"y"], Davies_df.loc[:,"y"] ], axis=1, keys=["Silhouette",'Davies'])
+    print(_df)  # 打印分数
+
     Silhouette_LinePlot = gr.update(value=Silhouette_df,
                                     label="轮廓系数",
                                     x="x",
@@ -437,8 +539,7 @@ def cluster_analyse(images_dir: str, max_cluster_number: int, vectorize_X_and_la
                                     width=400,
     )
     
-    
-    final_clusters_number = len( np.unique(y_pred) )  # 实际最大聚类数
+    # 由实际聚类次数决定展示的聚类次数
     head_number = max( 1, min( 10, round( math.log2(final_clusters_number) ) ) )  # 展示log2(实际聚类数)个，最少要展示1个，最多展示10个
     
     # 对轮廓系数从大到小排序，展示前head_number个
@@ -467,7 +568,7 @@ def create_gr_gallery(max_gallery_number: int) -> list:
     gr_Accordion_and_Gallery_list = []
     for i in range(max_gallery_number):
         with gr.Accordion(f"聚类{i}", open=True, visible=False) as Gallery_Accordion:
-            gr_Accordion_and_Gallery_list.extend( [ Gallery_Accordion, gr.Gallery(value=[]).style(columns=[6], height="auto") ] )
+            gr_Accordion_and_Gallery_list.extend( [ Gallery_Accordion, gr.Gallery(value=[]).style(columns=6, height="auto") ] )
     return gr_Accordion_and_Gallery_list
 
 
@@ -605,7 +706,7 @@ with gr.Blocks(css=css) as demo:
             images_dir = gr.Textbox(label="图片目录")     
         with gr.Row():
             with gr.Column(scale=1):
-                vectorizer_method_list = ["TfidfVectorizer", "CountVectorizer"]
+                vectorizer_method_list = ["TfidfVectorizer", "CountVectorizer", "WD14"]
                 vectorizer_method = gr.Dropdown(vectorizer_method_list, label="特征提取", value=vectorizer_method_list[0], type="index")
             use_comma_tokenizer = gr.Checkbox(label="强制逗号分词", value=True, info="启用后则以逗号划分各个tag。不启用则同时以空格和逗号划分")
             use_binary_tokenizer = gr.Checkbox(label="tag频率二值化", value=True, info="只考虑是否tag出现而不考虑出现次数")
@@ -672,7 +773,7 @@ with gr.Blocks(css=css) as demo:
     # 确定聚类
     confirm_cluster_button.click(fn=confirm_cluster,
                                  inputs=[process_clusters_method, global_dict_State],
-                                 outputs=[confirm_cluster_Row],
+                                 outputs=[confirm_cluster_Row], # type: ignore
     )
 
 

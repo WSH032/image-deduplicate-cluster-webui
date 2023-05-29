@@ -18,9 +18,9 @@ import logging
 from typing import Callable, Dict, List, Union, Tuple
 
 # import pandas as pd
+# encodings = {}  # 用于记录图片编码  #已经弃用，不再需要编码
 
 choose_image_index = "0:0"  # 用于记录当前点击了画廊哪个图片
-encodings = {}  # 用于记录图片编码
 cluster_list = []  # list[ list[str] ] 用于记录重复图片的聚类结果
 confirmed_images_dir = ""  # 用于记录查重结果对应的文件夹路径，防止使用者更改导致错误
 images_info_list = []  # list[dict] 用于记录重复图片的属性信息
@@ -40,11 +40,14 @@ def find_duplicates_images(images_dir: str, use_cache:bool):
         
         # 载入模型
         phasher = PHash()
-        # 编码
-        global encodings, duplicates
-        encodings = phasher.encode_images(image_dir=images_dir)
+
+        # 不再需要编码了，直接从路径找即可
+        # global encodings
+        # encodings = phasher.encode_images(image_dir=images_dir)
+        
+        global duplicates
         # 查找重复
-        duplicates = phasher.find_duplicates(encoding_map=encodings)
+        duplicates = phasher.find_duplicates(image_dir=images_dir) # type: ignore
         # 只保留确实有重复的图片,并弄成集合列表
         indeed_duplicates_set = [set(v).union({k}) for k, v in duplicates.items() if v]
         # 将重复的图片聚类
@@ -103,7 +106,7 @@ def find_duplicates_images(images_dir: str, use_cache:bool):
     gallery_images_dir = images_dir if not use_cache else os.path.join( images_dir, "cache" )
     images_tuple_list = cluster_to_gallery( gallery_images_dir, cluster_list)
     
-    def get_images_info(images_dir: str, cluster_list: list) -> list:
+    def get_images_info(images_dir: str, cluster_list: list) -> list[dict]:
         # 获取图片的信息成一个字典，放入列表中
         
         images_info_list = []
@@ -115,7 +118,7 @@ def find_duplicates_images(images_dir: str, use_cache:bool):
                     image_info_dict = {"resolution(l,w)":im.size,
                                        "size":f"{size_MB} MB",
                                        "format":im.format,
-                                       "filename":im.filename                  
+                                       "filename":im.filename                   # type: ignore
                     }
                     images_info_list.append(image_info_dict)
 
@@ -138,7 +141,7 @@ def find_duplicates_images(images_dir: str, use_cache:bool):
     
 
 
-def confirm(delet_images_str: str) -> str:
+def confirm(delet_images_str: str) -> Tuple[str, dict, dict]:
     
     # 尝试将字符串载入成字典
     try:
@@ -167,7 +170,7 @@ def confirm(delet_images_str: str) -> str:
     return toml.dumps(delet_images_dict), gr.update( variant="secondary" ), gr.update( variant='primary' )
 
 
-def cancel(delet_images_str: str) -> str:
+def cancel(delet_images_str: str) -> Tuple[str, dict, dict]:
     
     # 尝试将字符串载入成字典
     try:
@@ -334,6 +337,8 @@ def get_choose_image_index(evt: gr.SelectData, delet_images_str: str):
     
     # 获取图片属性信息
     choose_image_index = evt.value
+    if  not isinstance(evt.index, int):
+        raise TypeError(f"get_choose_image_index函数中evt.index 应为整数, 但是现在是{type(evt.index)}")
     image_info_json = images_info_list[evt.index]
     
     # 尝试判断所浏览的图片是否已经在待删除列表中
@@ -372,7 +377,7 @@ with gr.Blocks(css="#delet_button {color: red}") as demo:
     with gr.Row():
         with gr.Column(scale=10):
             with gr.Row():
-                duplicates_images_gallery = gr.Gallery(label="重复图片", value=[]).style(columns=[6], height="auto", preview=False)
+                duplicates_images_gallery = gr.Gallery(label="重复图片", value=[]).style(columns=6, height="auto", preview=False)
             with gr.Row():
                 confirm_button = gr.Button("选择图片")
                 cancel_button = gr.Button("取消图片")

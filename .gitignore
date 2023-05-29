@@ -153,3 +153,4 @@ cython_debug/
 
 images/
 wd14_tagger_model/
+.vscode/

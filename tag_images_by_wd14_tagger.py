@@ -4,6 +4,7 @@ import argparse
 import csv
 import glob
 import os
+from typing import List, Optional, Tuple
 
 # 把torh放在tensorflow的前面导入，让它调用cuda环境给tensorflow
 import torch
@@ -12,7 +13,7 @@ from PIL import Image
 import cv2
 from tqdm import tqdm
 import numpy as np
-from tensorflow.keras.models import load_model
+from tensorflow.keras.models import load_model, Model  # type: ignore
 from huggingface_hub import hf_hub_download
 from pathlib import Path
 
@@ -48,7 +49,7 @@ def preprocess_image(image):
     return image
 
 
-class ImageLoadingPrepDataset(torch.utils.data.Dataset):
+class ImageLoadingPrepDataset(torch.utils.data.Dataset): # type: ignore
     def __init__(self, image_paths):
         self.images = image_paths
 
@@ -78,7 +79,7 @@ def collate_fn_remove_corrupted(batch):
     batch = list(filter(lambda x: x is not None, batch))
     return batch
 
-
+#  -> List[ List[np.array, np.array], List[str] ] 
 def main(args):
     # hf_hub_downloadをそのまま使うとsymlink関係で問題があるらしいので、キャッシュディレクトリとforce_filenameを指定してなんとかする
     # depreacatedの警告が出るけどなくなったらその時
@@ -101,6 +102,15 @@ def main(args):
 
     # 画像を読み込む
     model = load_model(args.model_dir)
+    
+    if model is None:
+        raise ValueError("model is None")
+
+    # 用于获取两个层的输出，方便聚类使用倒数第三层的数据
+    layer1 = model.get_layer(index=-3) # 获取倒数第三层的对象，predictions_norm 层
+    layer2 = model.get_layer(index=-1) # 获取最后一层的对象，predictions_sigmoid 预测层
+    model = Model(inputs=model.input, outputs=[layer1.output, layer2.output]) # 构建一个新的模型，输入和原模型相同，输出是两个指定层的输出
+    
 
     # label_names = pd.read_csv("2022_0000_0899_6549/selected_tags.csv")
     # 依存ライブラリを増やしたくないので自力で読むよ
@@ -132,20 +142,43 @@ def main(args):
         return image_paths
     
     train_data_dir_path = Path(args.train_data_dir)
-    image_paths = glob_images_pathlib(train_data_dir_path, args.recursive)
+    # 如果传入了force_images_list，就按这个列表处理指定的图片
+    try:
+        image_paths = args.force_images_list
+        print("正在进行聚类分析，不再处理tags文本")
+    except:
+        image_paths = glob_images_pathlib(train_data_dir_path, args.recursive)
+    
     print(f"found {len(image_paths)} images.")
 
     tag_freq = {}
+    layer1_output_list = []  # 用于记录开头层数据
+    layer2_output_list = []  # 用于记录末尾层数据
 
     undesired_tags = set(args.undesired_tags.split(","))
 
     def run_batch(path_imgs):
         imgs = np.array([im for _, im in path_imgs])
 
-        probs = model(imgs, training=False)
+        layer1_output, probs = model(imgs, training=False) # type: ignore
+        
+        layer1_output = layer1_output.numpy()
         probs = probs.numpy()
-
-        for (image_path, _), prob in zip(path_imgs, probs):
+        
+        layer1_output_list.extend( layer1_output )
+        layer2_output_list.extend( probs )
+        
+        # 如果传入了这个列表，即代表要进行聚类分析，则不再需要进行以下的tags文本工作
+        try:
+            args.force_images_list
+            # tqdm.write("正在进行聚类分析，不再处理tags文本")
+            return
+        # 如果出错，则代表没传入列表,则正常进行
+        except:
+            pass
+        
+        
+        for (image_path, _), prob in zip(path_imgs, probs): # type: ignore
             # 最初の4つはratingなので無視する
             # # First 4 labels are actually ratings: pick one with argmax
             # ratings_names = label_names[:4]
@@ -184,16 +217,17 @@ def main(args):
                 character_tag_text = character_tag_text[2:]
 
             tag_text = ", ".join(combined_tags)
-
+            
             with open(os.path.splitext(image_path)[0] + args.caption_extension, "wt", encoding="utf-8") as f:
                 f.write(tag_text + "\n")
                 if args.debug:
                     print(f"\n{image_path}:\n  Character tags: {character_tag_text}\n  General tags: {general_tag_text}")
-
+    
+     
     # 読み込みの高速化のためにDataLoaderを使うオプション
     if args.max_data_loader_n_workers is not None:
         dataset = ImageLoadingPrepDataset(image_paths)
-        data = torch.utils.data.DataLoader(
+        data = torch.utils.data.DataLoader( # type: ignore
             dataset,
             batch_size=args.batch_size,
             shuffle=False,
@@ -240,6 +274,15 @@ def main(args):
             print(f"{tag}: {freq}")
 
     print("done!")
+    
+    # 结构为List[ List[np.array, np.array], List[str] ]
+    # List[np.array, np.array]
+    #   第一个元素为一个矩阵，(样本图片数量 * 所选的开头层参数长度 )
+    #   第一个元素为一个矩阵，(样本图片数量 * 所选的结尾层参数长度 )
+    # List[str]
+    #   里面的元素为从selected_tags.csv读取的tags，包含了分级tag
+    ### 请注意，这里以一个元素请保证为List，因为后续聚类已经进行了硬编码 ###
+    return [ [ np.array(layer1_output_list), np.array(layer2_output_list) ],  [ row[1] for row in rows ] ]
 
 
 def setup_parser() -> argparse.ArgumentParser:
@@ -301,6 +344,9 @@ def setup_parser() -> argparse.ArgumentParser:
         help="comma-separated list of undesired tags to remove from the output / 出力から除外したいタグのカンマ区切りのリスト",
     )
     parser.add_argument("--frequency_tags", action="store_true", help="Show frequency of tags for images / 画像ごとのタグの出現頻度を表示する")
+    
+    # 注意，这个参数不能添加进去，因为代码里面是通过判断其存不存在来决定是否在进行聚类，而不是看其是否为None
+    # parser.add_argument("--force_images_list", type=str, default=None, help="指定要处理的图片列表，将会按顺序处理")  # 有bug
 
     return parser
 
