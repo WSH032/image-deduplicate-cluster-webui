@@ -1,21 +1,22 @@
-# for all
-gradio>=3.24.1
+### for all ###
+gradio>=3.28.0
 tqdm
 pandas
 pillow
 numpy
-torch
 
-# for deduplicate
+### for deduplicate ###
 toml
 imagededup
+torch
 
-# for cluster
+### for cluster ###
+# matplotlib
+# scipy
 scikit-learn >= 1.2.2
-matplotlib
-scipy
 
-# for tagger
+### for tagger ###
+torch
 tensorflow>=2.10.1, <2.11
 huggingface_hub
 opencv-python>=4.7.0.68

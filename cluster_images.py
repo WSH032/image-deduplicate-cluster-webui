@@ -14,10 +14,8 @@ from sklearn.feature_selection import chi2, mutual_info_regression, mutual_info_
 from sklearn.decomposition import TruncatedSVD
 from sklearn.preprocessing import normalize
 import os 
-import matplotlib.pyplot as plt
 import numpy as np
 import gradio as gr
-from scipy.cluster.hierarchy import linkage, dendrogram
 from SearchImagesTags import SearchImagesTags
 import tag_images_by_wd14_tagger as tagger
 from tqdm import tqdm
@@ -29,6 +27,8 @@ import shutil
 import math
 import logging
 
+# import matplotlib.pyplot as plt 暂时不需要
+# from scipy.cluster.hierarchy import linkage, dendrogram 暂时不需要
 
 
 MAX_GALLERY_NUMBER = 100  # 画廊里展示的最大聚类数量为100
