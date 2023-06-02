@@ -24,6 +24,8 @@
 
 ## 安装 Install
 
+**在python3.9下完成编写，可能之前版本也可以使用，不保证**
+
 这个项目被分为三个模块
  - 图像查重
  - 图像聚类
@@ -33,20 +35,21 @@
 
 你可以把你不要的模块从中删去
 
-**一键运行`install.sh`即可**
+**一键运行`install.ps1`即可**
 
 ![install](./docs/install.png)
 
 ### 安装Tips
 对于WD14 模型的使用，可以进行CPU或者GPU的推理，其中GPU的推理速度快，但是要求cuda环境
 
-运行`install.sh`时会提问你是否需要安装`Torch==2.0.0 + cuda118`
+运行`install.ps1`时会提问你是否需要安装`Torch==2.0.0 + cuda118`
 
 如果你配置过系统级的cuda环境，或者你不需要使用WD14模型的GPU推理，可以选择否
 
 如果你需要进行WD14 tagger的GPU推理，你可以选择Y进行`Torch==2.0.0 + cuda118`的安装，其能够在虚拟环境中配置cuda环境
 
 ## 使用Tips
+需要更新时，运行`update.bat`完成更新
 
 ### 图片查重
 图片查重不依赖任何tag文本或者WD14模型
@@ -56,13 +59,15 @@
 ![deduplicate_demo](./docs/deduplicate_demo.png)
 
 ### 图片聚类
+一键运行`run_cluster_images.ps1`，其将会生成一个WebUI，进行操作即可
+
 图片聚类依赖与图片同名的txt文本**或者**npz文件进行聚类，这取决于你在WebUI中选择的特征提取方式
 
 ![vectorize_method](./docs/vectorize_method.png)
 
 #### 选择tf-idf或者countvectorizer提取特征，则需要txt文本
 其中txt内容为与图片对应的booru风格的tag标签，例如
-`1girl， solo， yellow eyes`
+`1girl, solo, yellow eyes`
 
 ![image_with_tag](./docs/image_with_tag.png)
 
