@@ -150,10 +150,10 @@ def vectorizer(images_dir: str,
                     X_inside.append(npz[f"layer{skip}"])
                     X_outside.append(npz[f"layer0"])
             except Exception as e:
-                logging.error(f"读取 {npz_file} 向量特征时出错，其将会被置零：\n{e}")
+                logging.error(f"读取 {npz_file} 向量特征时出错，其将会被置一：\n{e}")
                 # 读错了就跳过
-                X_inside.append([])
-                X_outside.append([])
+                X_inside.append(None)
+                X_outside.append(None)
                 error_indies.append(index)  # 记录出错位置
                 continue
         
@@ -161,19 +161,21 @@ def vectorizer(images_dir: str,
             raise Exception(f"所有向量特征读取错误，无法继续")
         
         def check_error(need_check_list: List[np.ndarray], error_indies: List[int]):
-            """ 将错误读取的矩阵元素全部置零，会直接修改传入的need_check_list """
+            """ 将错误读取的矩阵元素全部置一，会直接修改传入的need_check_list """
 
             # 没有错误就不检查了
             if not error_indies:
                 return
             for temp in need_check_list:
-                # 找到一个不为空的正确元素，记录其中矩阵的维度，生成一个同样大小的零矩阵
+                # 找到一个不为空的正确元素，记录其中矩阵的维度，生成一个同样大小的一矩阵
                 # 赋值给需要检查列表中错误的元素
-                if temp:
-                    zero_arr = np.zeros_like(temp)
+                if temp is not None:
+                    # repalce_arr = np.zeros_like(temp)
+                    repalce_arr = np.ones_like(temp)
                     for index in error_indies:
-                        need_check_list[index] = zero_arr
+                        need_check_list[index] = repalce_arr
                     break
+        # 注意，请先检查数据，因为如果读取出错了列表里面会有None元素，无法转为矩阵
         check_error(X_inside, error_indies)
         check_error(X_outside, error_indies)
         
@@ -186,8 +188,8 @@ def vectorizer(images_dir: str,
                 tf_tags_list = f.read().splitlines()  # 向量每列对应的tag
         except Exception as e:
             logging.error(f"读取 wd14_vec_tag.wd14.txt 文件时出错，无法进行特征重要性分析，后续不会显示聚类标签：\n{e}")
-            # 出错了就生成与outside层特征维度数一样数量的标签"error"
-            tf_tags_list = [ "error" for i in range( len( X[1] ) ) ]
+            # 出错了就生成与outside层特征维度数(列数)一样数量的标签"error"
+            tf_tags_list = [ "error" for i in range( X[1].shape[1] ) ]
         
     else:
         logging.error("特征提取方法选择出错， 默认选择 tfidf 提取方法")
