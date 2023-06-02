@@ -26,6 +26,8 @@ from datetime import datetime
 import shutil
 import math
 import logging
+import multiprocessing
+import gc
 
 # import matplotlib.pyplot as plt 暂时不需要
 # from scipy.cluster.hierarchy import linkage, dendrogram 暂时不需要
@@ -35,18 +37,17 @@ MAX_GALLERY_NUMBER = 100  # 画廊里展示的最大聚类数量为100
 CACHE_RESOLUTION = 256  # 缓存图片时最大分辨率
 
 
-#  -> List[ List[np.array, np.array], List[str] ] 
-def WD14tagger(force_images_list: List[str]):
+
+def WD14tagger(train_data_dir: str) -> None :
     
-    train_data_dir = "no_need"  # 实际不重要，因为已经传入了force_images_list
+    train_data_dir = train_data_dir
     repo_id = "SmilingWolf/wd-v1-4-moat-tagger-v2"
-    model_dir = r"E:\GitHub\image-deduplicate-cluster-webui\wd14_tagger_model"
+    model_dir = r"wd14_tagger_model"
     batch_size = 8
     max_data_loader_n_workers = 2
     caption_extension = ".txt"
     general_threshold = 0.35
     character_threshold = 0.35
-    force_images_list = force_images_list
     
     cmd_params_list = [train_data_dir,
                         f"--repo_id={repo_id}",
@@ -60,11 +61,16 @@ def WD14tagger(force_images_list: List[str]):
     
     parser = tagger.setup_parser()
     args = parser.parse_args( cmd_params_list )
-    
-    args.force_images_list = force_images_list
-    
-    return tagger.main(args)
+    tagger.main(args)
 
+# 运行这个可以启动WD14 tagger脚本来打标
+def use_wd14(images_dir: str) -> dict:
+    # 要用这个，而不能用concurrent.futures.ProcessPoolExecutor，不然也不能释放显存，我也不知道为什么
+    
+    p = multiprocessing.Process(target=WD14tagger, args=(images_dir,))
+    p.start()
+    p.join()
+    return gr.update(value = f"完成了，打标地址: {images_dir}")
 
 # 逗号分词器
 def comma_tokenizer(text: str) -> List[str]:
@@ -127,12 +133,61 @@ def vectorizer(images_dir: str,
         # stop_tags = tfvec.stop_words_
     
     elif vectorizer_method == 2 :
-        # 读取图片名字， 用WD14
-        image_files_list = searcher.image_files()
+
+        # 读取储存在.wd14.npz文件中的向量特征
+        searcher = SearchImagesTags(images_dir, tag_file_ext=".wd14.npz")
+        npz_files_list = searcher.tag_files()
+
+        skip = 2  # 取倒数第三层
+
+        # 用来暂存向量
+        X_inside = []  # 入口层，取决于skip
+        X_outside = []  # 出口层
+        error_indies = []  # 读取错误的文件索引
+        for index, npz_file in enumerate(npz_files_list):
+            try:
+                with np.load( os.path.join(images_dir, npz_file) ) as npz:
+                    X_inside.append(npz[f"layer{skip}"])
+                    X_outside.append(npz[f"layer0"])
+            except Exception as e:
+                logging.error(f"读取 {npz_file} 向量特征时出错，其将会被置零：\n{e}")
+                # 读错了就跳过
+                X_inside.append([])
+                X_outside.append([])
+                error_indies.append(index)  # 记录出错位置
+                continue
         
-        temp = WD14tagger( [ os.path.join(images_dir, name) for name in image_files_list] ) 
-        X =  temp[0] # 向量特征组，List[np.array, np.array], 第一个是入口层，第二个是输出层
-        tf_tags_list = temp[1]  # 向量每列对应的tag
+        if len(error_indies) == len(npz_files_list):
+            raise Exception(f"所有向量特征读取错误，无法继续")
+        
+        def check_error(need_check_list: List[np.ndarray], error_indies: List[int]):
+            """ 将错误读取的矩阵元素全部置零，会直接修改传入的need_check_list """
+
+            # 没有错误就不检查了
+            if not error_indies:
+                return
+            for temp in need_check_list:
+                # 找到一个不为空的正确元素，记录其中矩阵的维度，生成一个同样大小的零矩阵
+                # 赋值给需要检查列表中错误的元素
+                if temp:
+                    zero_arr = np.zeros_like(temp)
+                    for index in error_indies:
+                        need_check_list[index] = zero_arr
+                    break
+        check_error(X_inside, error_indies)
+        check_error(X_outside, error_indies)
+        
+        # list[np.ndarray]  # np.ndarray.shape = (n_samples, n_features)
+        X = [ np.array(X_inside), np.array(X_outside) ]
+
+        try:
+            # 读取对应的tag文件
+            with open( os.path.join(images_dir, "wd14_vec_tag.wd14.txt"), "r", encoding="utf-8") as f:
+                tf_tags_list = f.read().splitlines()  # 向量每列对应的tag
+        except Exception as e:
+            logging.error(f"读取 wd14_vec_tag.wd14.txt 文件时出错，无法进行特征重要性分析，后续不会显示聚类标签：\n{e}")
+            # 出错了就生成与outside层特征维度数一样数量的标签"error"
+            tf_tags_list = [ "error" for i in range( len( X[1] ) ) ]
         
     else:
         logging.error("特征提取方法选择出错， 默认选择 tfidf 提取方法")
@@ -698,6 +753,39 @@ with gr.Blocks(css=css) as demo:
     global_dict_State["images_dir"] = images_dir
     """
     
+    with gr.Accordion(label="使用说明") as wd14_accordion:
+        gr.Markdown("""
+        # 基于booru风格的tag标签或者WD14提取的特征向量进行聚类
+
+        ## 对于tag标签的聚类
+        **可以使用WD14打标，也可以使用booru上下载的tag文本**
+         - 使用tfidf或者countvectorizer提取方法
+         - 要求目录下有与图片同名的`.txt`文件，其中内容为booru风格的tag标签
+
+        ## 对于WD14提取的特征向量的聚类
+        **必须使用本项目自带的WD14脚本完成特征向量提取**
+         - 要求目录下有与图片同名的`.wd14.npz`文件，里面记录了每个图片的特征向量
+         - 要求目录下存在一个`wd14_vec_tag.wd14.txt`文件，里面记录了每个特征向量对应的tag
+        
+         ## WD14模型使用
+         你可以打开并修改`run_tagger.ps1`同时完成上述两个准备，该脚本采用友好交互编写
+
+         你也可以填入`图片目录`，然后按下这个按钮使用默认参数等效运行这个脚本
+          - 首次运行会下载WD14模型，可能需要等待一段时间
+          - 运行时候也需要等待，请去终端查看输出
+
+         ## Credits
+         我不训练模型，WD14模型来自于这个项目[SmilingWolf/WD14](https://huggingface.co/SmilingWolf)
+
+         聚类方法和特征提取来着于sklearn库
+
+         tag_images_by_wd14_tagger来自[kohya](https://github.com/kohya-ss/sd-scripts/blob/main/finetune/tag_images_by_wd14_tagger.py)
+        """)
+        with gr.Row():
+            wd14_finish_Textbox = gr.Textbox(label="模型使用完成提示", value="如果要使用WD14打标,在图片目录框填入路径后点击", visible=True)
+            use_wd14_button = gr.Button("WD14模型打标", elem_classes="attention")
+
+
     with gr.Box():
         vectorize_X_and_label_State = gr.State(value=[])  # 用于存放特征向量，和其对应的tag
         cluster_model_State = gr.State()  # 用于存放预处理中生成的聚类模型
@@ -748,6 +836,11 @@ with gr.Blocks(css=css) as demo:
                 confirm_cluster_button = gr.Button(value="确认聚类", elem_classes="attention")
             gr_Accordion_and_Gallery_list = create_gr_gallery(MAX_GALLERY_NUMBER)
 
+    # 使用wd14模型打标
+    use_wd14_button.click(fn=use_wd14,
+                            inputs=images_dir,
+                            outputs=wd14_finish_Textbox,
+    )
     # 特征提取与模型选择
     vectorizer_button.click(fn=vectorizer,
                             inputs=[images_dir, vectorizer_method, use_comma_tokenizer, use_binary_tokenizer, cluster_model],

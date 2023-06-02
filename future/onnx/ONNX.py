@@ -9,7 +9,6 @@ import glob
 import os
 from typing import List, Optional, Tuple
 import gc
-import time
 
 # 把torh放在tensorflow的前面导入，让它调用cuda环境给tensorflow
 import torch
@@ -18,14 +17,15 @@ from PIL import Image
 import cv2
 from tqdm import tqdm
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras.models import load_model, Model  # type: ignore
-from tensorflow.keras.backend import clear_session  # type: ignore
 from huggingface_hub import hf_hub_download
 from pathlib import Path
 import logging
 
+import onnx
+import onnxruntime as rt
 
+
+import time
 
 # from wd14 tagger
 IMAGE_SIZE = 448
@@ -108,24 +108,15 @@ def main(args) -> None :
         print("using existing wd14 tagger model")
 
     # 画像を読み込む
-    model = load_model(args.model_dir)
+    model = onnx.load( os.path.join(args.model_dir, "model.onnx") )
     
     if model is None:
         raise ValueError("model is None")
 
     # 用于获取两个层的输出，方便聚类使用倒数第三层的数据
-    layer0 = model.get_layer(index=-1) # 获取最后一层的对象，predictions_sigmoid 预测层
-    layer1 = model.get_layer(index=-2) # 获取倒数第二层的对象
-    layer2 = model.get_layer(index=-3) # 获取倒数第三层的对象，predictions_norm 层
-    layer3 = model.get_layer(index=-4) # 获取倒数第四层的对象
-    
-    model = Model(inputs=model.input,
-              outputs=[layer0.output,
-                    layer1.output,
-                    layer2.output,
-                    layer3.output,
-              ]
-          ) 
+    for node in model.graph.node[-2:-5:-1]:  # type: ignore
+        for output in node.output:
+            model.graph.output.extend([onnx.ValueInfoProto(name=output)])  # type: ignore
 
     # 输出参数shape
     # print(layer0.output_shape)
@@ -188,15 +179,41 @@ def main(args) -> None :
 
     undesired_tags = set(args.undesired_tags.split(","))
 
+    # 载入模型
+    InferenceSession_time_start = time.time()
+    providers =  rt.get_available_providers()
+    providers = providers if torch.cuda.is_available() else [ providers[-1] ]  # type: ignore
+    # providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+    print("可用设备",providers)
+    ort_session = rt.InferenceSession(model.SerializeToString(), providers=providers)  # type: ignore
+    outputs = [x.name for x in ort_session.get_outputs()]
+    print("载入模型用时", time.time() - InferenceSession_time_start, "秒")
+    
+
     def run_batch(path_imgs):
+
         imgs = np.array([im for _, im in path_imgs])
 
-        layer0_output, layer1_output, layer2_output, layer3_output = model(imgs, training=False)
+        layer0_output = []
+        layer1_output = []
+        layer2_output = []
+        layer3_output = []
+
+        # onnx里面只能拆成单个单个样本逐个推理
+        for i in imgs:
+            i = np.expand_dims(i, axis=0)
+            ort_inputs = {ort_session.get_inputs()[0].name: i,}
+            ort_out = ort_session.run(outputs, ort_inputs)
+
+            layer0_output.append(ort_out[0])
+            layer1_output.append(ort_out[1])
+            layer2_output.append(ort_out[2])
+            layer3_output.append(ort_out[3])
         
-        layer0_output = layer0_output.numpy()
-        layer1_output = layer1_output.numpy()
-        layer2_output = layer2_output.numpy()
-        layer3_output = layer3_output.numpy()
+        layer0_output = np.vstack(layer0_output)
+        layer1_output = np.vstack(layer1_output)
+        layer2_output = np.vstack(layer2_output)
+        layer3_output = np.vstack(layer3_output)
 
         probs = layer0_output  # kohya原来就是这样命名的，我懒得改下面代码
         
@@ -280,12 +297,7 @@ def main(args) -> None :
     # 読み込みの高速化のためにDataLoaderを使うオプション
     if args.max_data_loader_n_workers is not None:
         dataset = ImageLoadingPrepDataset(image_paths)
-        """
-        # 在子进程里使用需要在import一次，我也不知道为什么，别删
-        # 我现在把它删了，报错也没再次出现，很奇怪？？？
-        # 或许我们需要改变上下文继承为fork？
-        # import torch
-        """
+        import torch  # 在子进程里使用需要在import一次，我也不知道为什么，别删
         data = torch.utils.data.DataLoader( # type: ignore
             dataset,
             batch_size=args.batch_size,
@@ -297,12 +309,14 @@ def main(args) -> None :
     else:
         data = [[(None, ip)] for ip in image_paths]
 
-    b_imgs = []
+
+    b_imgs = []  # 用于暂时存放待生成batch时候的数据
+    tqdm.write("分配进程中...")
     for data_entry in tqdm(data, smoothing=0.0):
         for data in data_entry:
             if data is None:
                 continue
-
+            
             image, image_path = data
             if image is not None:
                 image = image.detach().numpy()
@@ -318,19 +332,22 @@ def main(args) -> None :
             b_imgs.append((image_path, image))
 
             if len(b_imgs) >= args.batch_size:
-                b_imgs = [(str(image_path), image) for image_path, image in b_imgs]  # Convert image_path to string
-                run_batch(b_imgs)
+                # 注意这里必须要存在一个新list里，不然直接用b_imgs.clear()，会出现线程还没调用，内存中b_imgs就已经被删了
+                b_imgs_batch = [(str(image_path), image) for image_path, image in b_imgs]  # Convert image_path to string
+                run_batch(b_imgs_batch) # 同步任务
                 b_imgs.clear()
 
     if len(b_imgs) > 0:
         b_imgs = [(str(image_path), image) for image_path, image in b_imgs]  # Convert image_path to string
-        run_batch(b_imgs)
+        run_batch(b_imgs) # 同步任务
+
 
     if args.frequency_tags:
         sorted_tags = sorted(tag_freq.items(), key=lambda x: x[1], reverse=True)
         print("\nTag frequencies:")
         for tag, freq in sorted_tags:
             print(f"{tag}: {freq}")
+    
 
     """不起作用
     def _release(model):
@@ -425,23 +442,33 @@ def setup_parser() -> argparse.ArgumentParser:
     """
     return parser
 
-if __name__ == "__main__":
 
-    start_time = time.time()
-    print("WD14 Tagger 开始")
-
-    parser = setup_parser()
+def WD14tagger(train_data_dir: str) -> None :
     
-    args = parser.parse_args()
-
-    # スペルミスしていたオプションを復元する
-    if args.caption_extention is not None:
-        args.caption_extension = args.caption_extention
-
-    if args.general_threshold is None:
-        args.general_threshold = args.thresh
-    if args.character_threshold is None:
-        args.character_threshold = args.thresh
-
+    train_data_dir = train_data_dir
+    repo_id = "SmilingWolf/wd-v1-4-moat-tagger-v2"
+    model_dir = r"wd14_tagger_model"
+    batch_size = 8
+    max_data_loader_n_workers = 4
+    caption_extension = ".txt"
+    general_threshold = 0.35
+    character_threshold = 0.35
+    
+    cmd_params_list = [train_data_dir,
+                        f"--repo_id={repo_id}",
+                        f"--model_dir={model_dir}",
+                        f"--batch_size={batch_size}",
+                        f"--max_data_loader_n_workers={max_data_loader_n_workers}",
+                        f"--caption_extension={caption_extension}",
+                        f"--general_threshold={general_threshold}",
+                        f"--character_threshold={character_threshold}",
+    ]
+    
+    parser = setup_parser()
+    args = parser.parse_args( cmd_params_list )
     main(args)
-    print("time used: ", time.time() - start_time)
+
+if __name__ == "__main__":
+    start_time = time.time()
+    WD14tagger(r"images")
+    print("耗时：", time.time() - start_time, "秒")

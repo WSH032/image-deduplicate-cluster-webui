@@ -154,3 +154,4 @@ cython_debug/
 images/
 wd14_tagger_model/
 .vscode/
+run_tagger - gb18030.ps1
