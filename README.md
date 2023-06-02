@@ -3,7 +3,87 @@
 
 ## 现在我们有什么？
  - 基于imagededup库，进行图片去重的WebUI
- - 基于sklearn库，以tags为特征的图片聚类WebUI
+ - 基于sklearn库，以tags为特征，或者以WD14 tagger模型提取的特征向量进行图片聚类WebUI
+
+## 部分展示
+### 查重演示
+![deduplicate_demo](./docs/deduplicate_demo.png)
+
+### 聚类演示
+![title_show](./docs/title_show.png)
+
+![images_cluster_show_0](./docs/images_cluster_show_0.png)
+
+**另一张复杂情况的8聚类效果请看[这里](./docs/images_cluster_show_1.png)**
+
+## Credit
+ - 我不训练模型，WD14模型来自于这个项目[SmilingWolf/WD14](https://huggingface.co/SmilingWolf)
+ - 聚类方法和特征提取来着于sklearn库
+ - 查重方法来自于imagededup库
+ - tag_images_by_wd14_tagger来自[kohya/sd-scripts](https://github.com/kohya-ss/sd-scripts/blob/main/finetune/tag_images_by_wd14_tagger.py)
+
+## 安装 Install
+
+这个项目被分为三个模块
+ - 图像查重
+ - 图像聚类
+ - WD14 tagger
+
+每个模块所需的依赖已经写在[requirements.txt](requirements.txt)
+
+你可以把你不要的模块从中删去
+
+**一键运行`install.sh`即可**
+
+![install](./docs/install.png)
+
+### 安装Tips
+对于WD14 模型的使用，可以进行CPU或者GPU的推理，其中GPU的推理速度快，但是要求cuda环境
+
+运行`install.sh`时会提问你是否需要安装`Torch==2.0.0 + cuda118`
+
+如果你配置过系统级的cuda环境，或者你不需要使用WD14模型的GPU推理，可以选择否
+
+如果你需要进行WD14 tagger的GPU推理，你可以选择Y进行`Torch==2.0.0 + cuda118`的安装，其能够在虚拟环境中配置cuda环境
+
+## 使用Tips
+
+### 图片查重
+图片查重不依赖任何tag文本或者WD14模型
+
+一键运行`run_deduplicate_images.ps1`，其将会生成一个WebUI，进行操作即可
+
+![deduplicate_demo](./docs/deduplicate_demo.png)
+
+### 图片聚类
+图片聚类依赖与图片同名的txt文本**或者**npz文件进行聚类，这取决于你在WebUI中选择的特征提取方式
+
+![vectorize_method](./docs/vectorize_method.png)
+
+#### 选择tf-idf或者countvectorizer提取特征，则需要txt文本
+其中txt内容为与图片对应的booru风格的tag标签，例如
+`1girl， solo， yellow eyes`
+
+![image_with_tag](./docs/image_with_tag.png)
+
+#### wd14提取特征，则需要npz文件
+其中npz文件储存着WD14模型提取的特征向量矩阵,其的生成**必须**使用本项目自带的`tag_images_by_wd14_tagger.py`，或者在聚类WebUI中生成
+
+这是因为聚类采用的是WD14模型的倒数第三层输出，这需要对原作者的模型进行结构调整
+
+![image_witg_npz](./docs/image_witg_npz.png)
+
+### WD14 tagger
+本项目自带的WD14 tagger模型来自于[SmilingWolf/WD14](https://huggingface.co/SmilingWolf)，我对其结构进行了调整，增加了后四层的输出，并采取倒数第三层做为特征向量
+
+你可以使用`tag_images_by_wd14_tagger.py`进行图片打标，获取txt文本，这与[toriato/stable-diffusion-webui-wd14-tagger](https://github.com/toriato/stable-diffusion-webui-wd14-tagger)的打标结果并无太大差异
+
+同时其会输出同名的npz文件，其中包含了WD14模型的倒数前四层的输出，你可以在聚类WebUI中使用
+
+**注意，SmilingWolf有很多个WD14 tagger模型，每个模型的结构都不一样，我需要的是norm层的输出结果，这在[wd-v1-4-moat-tagger-v2](https://huggingface.co/SmilingWolf/wd-v1-4-moat-tagger-v2)是倒数第三层，其他模型尚未进行测试**
+
+![run_tagger.png](./docs/run_tagger.png)
+
 
 ## Todo
 
@@ -67,10 +147,3 @@
   - 我把调整好的onnx上传到huggingface
 
  **考虑使用torch加载模型**
-
-## 部分展示
-![deduplicate_demo](./docs/deduplicate_demo.png)
-
-![cluster_demo_0](./docs/cluster_demo_0.png)
-
-![cluster_demo_1](./docs/cluster_demo_1.png)

@@ -43,7 +43,7 @@ def WD14tagger(train_data_dir: str) -> None :
     train_data_dir = train_data_dir
     repo_id = "SmilingWolf/wd-v1-4-moat-tagger-v2"
     model_dir = r"wd14_tagger_model"
-    batch_size = 8
+    batch_size = 2
     max_data_loader_n_workers = 2
     caption_extension = ".txt"
     general_threshold = 0.35
