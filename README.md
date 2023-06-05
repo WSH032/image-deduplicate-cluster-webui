@@ -22,6 +22,22 @@
  - 查重方法来自于imagededup库
  - tag_images_by_wd14_tagger来自[kohya/sd-scripts](https://github.com/kohya-ss/sd-scripts/blob/main/finetune/tag_images_by_wd14_tagger.py)
 
+## Change History
+如果你不会使用git命令，可以运行`update.ps1`完成更新
+### 5 Jun.2023 2023/06/05
+ - 增加并发推理功能,可以在读取数据时候进行推理，建议在GPU模式下使用，详细请看`run_tagger.ps1`中相关部分
+ - 增加tensorrt执行者的选项，可在大幅降低显存同时极大提高GPU推理，详细请看`run_tagger.ps1`中相关部分
+   - 需要tensorrt的支持，请阅读[docs.nvidia](https://docs.nvidia.com/deeplearning/tensorrt/install-guide/index.html#installing-zip)
+   - 下个版本添加添加自动化安装tensorrt脚本的支持
+   - 首次使用需要进行一段时间的编译，请耐心等待
+ - 关于并发推理和tensorrt的测试结果请看[tensorrt_speed_experiment.md](./docs/tensorrt/tensorrt_speed_experiment.md)
+ - 增加run_tagger.ps1中更多tagger参数的设置
+ - 修改gradio >= 3.31.0 以解决类型注解的问题[1#issue](https://github.com/WSH032/image-deduplicate-cluster-webui/issues/1)
+ - 因为高batch情况下会有显存溢出的问题，现在默认tagger推理的batch为1，请自行按需修改
+   - 合理的batch，达到75%的显存占用率时可以达到最大推理速度
+   - 聚类WebUI中tagger暂不支持设置推理参数，下个版本添加该功能支持
+ - 更新脚本由`update.bat`更改为`update.ps1`
+
 ## 安装 Install
 
 **在python3.9下完成编写，可能之前版本也可以使用，不保证**
@@ -49,8 +65,6 @@
 如果你需要进行WD14 tagger的GPU推理，你可以选择Y进行`Torch==2.0.0 + cuda118`的安装，其能够在虚拟环境中配置cuda环境
 
 ## 使用Tips
-需要更新时，运行`update.bat`完成更新
-
 ### 图片查重
 图片查重不依赖任何tag文本或者WD14模型
 

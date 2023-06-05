@@ -1,5 +1,5 @@
 ### for all ###
-gradio>=3.28.0
+gradio>=3.31.0
 tqdm
 pandas
 pillow
@@ -22,3 +22,4 @@ huggingface_hub
 opencv-python>=4.7.0.68
 onnx
 onnxruntime-gpu
+tf2onnx
