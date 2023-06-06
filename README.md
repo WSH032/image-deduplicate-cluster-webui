@@ -24,6 +24,16 @@
 
 ## Change History
 如果你不会使用git命令，可以运行`update.ps1`完成更新
+### 6 Jun.2023 2023/06/6
+new:
+ - 增加WebUI中WD14-tagger的UI界面，支持与`run_tagger.ps1`几乎一样的参数设置，详细请看[wd14_show_0](./docs/wd14_show_0.png)
+
+bugfix:
+ - 注释掉类型注解，以解决[1#issue](https://github.com/WSH032/image-deduplicate-cluster-webui/issues/1)
+
+future:
+ - 下个版本增加自动安装tensorrt的脚本
+
 ### 5 Jun.2023 2023/06/05
 **因为添加tf2onnx库的相关代码，需要更新依赖，请再次运行`install.ps1`完成更新**
 
@@ -102,6 +112,8 @@ bugfix:
 
 你可以使用`tag_images_by_wd14_tagger.py`进行图片打标，获取txt文本，这与[toriato/stable-diffusion-webui-wd14-tagger](https://github.com/toriato/stable-diffusion-webui-wd14-tagger)的打标结果并无太大差异
 
+**2023/06/6，新增WD14的WebUI界面，挂载在图片聚类WebUI中,展示图请看[wd14_show_0](./docs/wd14_show_0.png)**
+
 同时其会输出同名的npz文件，其中包含了WD14模型的倒数前四层的输出，你可以在聚类WebUI中使用
 
 **注意，SmilingWolf有很多个WD14 tagger模型，每个模型的结构都不一样，我需要的是norm层的输出结果，这在[wd-v1-4-moat-tagger-v2](https://huggingface.co/SmilingWolf/wd-v1-4-moat-tagger-v2)是倒数第三层，其他模型尚未进行测试**
@@ -116,11 +128,11 @@ bugfix:
 - [ ] 完成A111-SD-WebUI部署
 - [x] 增加WD14提取特征和生成tags文本
 	- [x] 使用WD14生成特征向量到npz文件，避免多次聚类时重复运行耗时
-	- [ ] 增加释放模型功能
+	- [x] 增加释放模型功能
 	- [x] 增加使用倒数第三层模型
 - 聚类
 	- [ ] 为图片聚类增加SVD降维
-	- [o] 增加tags文本字符串预处理（如将空格变为逗号）
+	- ~~[ ] 增加tags文本字符串预处理（如将空格变为逗号）~~
 	  - 已经取消，因为Gelbooru-API-Downloader已经自带了这个功能
 	- [ ] 为聚类文件夹增加标签
 	- [ ] 修正特征重要性分析的标签错误(应用占比50判断)
@@ -130,7 +142,7 @@ bugfix:
 	- [x] 更多聚类方式
 	  - 现在有kmeans，谱聚类、层次聚类，OPTICS聚类
 	  - [ ] 为不同聚类方式增加参数选择功能
-	  - [o] 将聚类方法选择独立出来
+	  - ~~[ ] 将聚类方法选择独立出来~~
 	    - 暂时取消,因为使用npz文件后，读取特征向量已经很快了
 - 查重
 	- [x] 为查重添加选择全部选项

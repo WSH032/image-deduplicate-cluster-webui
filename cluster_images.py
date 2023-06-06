@@ -20,13 +20,14 @@ from SearchImagesTags import SearchImagesTags
 import tag_images_by_wd14_tagger as tagger
 from tqdm import tqdm
 from PIL import Image
-from typing import Callable, List
+from typing import Callable, List, Union, Tuple, Dict, Any
 import pandas as pd
 from datetime import datetime
 import shutil
 import math
 import logging
 import multiprocessing
+import time
 import gc
 
 # import matplotlib.pyplot as plt 暂时不需要
@@ -36,41 +37,80 @@ import gc
 MAX_GALLERY_NUMBER = 100  # 画廊里展示的最大聚类数量为100
 CACHE_RESOLUTION = 256  # 缓存图片时最大分辨率
 
+# 用于保存模型，避免每次都要加载模型，浪费时间
+# 注意，这个只能用全局变量，不能用gr.State，因为在页面刷新后gr.State就会丢失对地址的引用，造成内存泄漏
+model_in_memory = None  # Union[None, ort.InferenceSession]
 
 
-def WD14tagger(train_data_dir: str) -> None :
-    
-    train_data_dir = train_data_dir
-    repo_id = "SmilingWolf/wd-v1-4-moat-tagger-v2"
-    model_dir = r"wd14_tagger_model"
-    batch_size = 1
-    max_data_loader_n_workers = 2
-    caption_extension = ".txt"
-    general_threshold = 0.35
-    character_threshold = 0.35
-    
+# 运行这个可以启动WD14 tagger脚本来打标
+def use_wd14(train_data_dir: str,
+                repo_id: str,
+                force_download: bool,
+                model_dir: str,
+                batch_size: int,
+                max_data_loader_n_workers: int,
+                general_threshold: float,
+                character_threshold: float,
+                caption_extension: str,
+                undesired_tags: str,
+                remove_underscore: bool,
+                concurrent_inference: bool,
+                tensorrt: bool,
+                tensorrt_batch_size: int,
+    ) -> dict:
+
+    global model_in_memory  #  存放对模型的引用，保证其在内存中 # Union[None, ort.InferenceSession]
+
+    use_wd14_start_time = time.time()
     cmd_params_list = [train_data_dir,
                         f"--repo_id={repo_id}",
                         f"--model_dir={model_dir}",
                         f"--batch_size={batch_size}",
-                        f"--max_data_loader_n_workers={max_data_loader_n_workers}",
                         f"--caption_extension={caption_extension}",
                         f"--general_threshold={general_threshold}",
                         f"--character_threshold={character_threshold}",
+                        f"--undesired_tags={undesired_tags}",
     ]
+    if force_download:
+        cmd_params_list.append("--force_download")
+    if max_data_loader_n_workers:  # 如果为0，就不会使用多线程读取数据
+        cmd_params_list.append(f"--max_data_loader_n_workers={max_data_loader_n_workers}")
+    if remove_underscore:
+        cmd_params_list.append("--remove_underscore")
+    if concurrent_inference:
+        cmd_params_list.append("--concurrent_inference")
+    if tensorrt:
+        cmd_params_list.append("--tensorrt")
+        cmd_params_list.append(f"--tensorrt_batch_size={tensorrt_batch_size}")
     
     parser = tagger.setup_parser()
     args = parser.parse_args( cmd_params_list )
-    tagger.main(args)
 
-# 运行这个可以启动WD14 tagger脚本来打标
-def use_wd14(images_dir: str) -> dict:
+    """
     # 要用这个，而不能用concurrent.futures.ProcessPoolExecutor，不然也不能释放显存，我也不知道为什么
-    
-    p = multiprocessing.Process(target=WD14tagger, args=(images_dir,))
+    p = multiprocessing.Process(target=tagger.main, args=(args,))
     p.start()
     p.join()
-    return gr.update(value = f"完成了，打标地址: {images_dir}")
+    """
+
+    # 首次运行之前，model_in_memory为None; 运行一次过后，tagger.main会返回一个ort.InferenceSession
+    # 保持对他引用，可以将模型保存在内存中，下次运行时就不用再加载模型了
+    model_in_memory = tagger.main(args, model_in_memory)
+
+    total_time = time.time() - use_wd14_start_time
+    print_str = f"完成了，打标地址: {train_data_dir}\n总共用时{total_time:.2f}秒"
+    print(print_str)
+
+    return gr.update(value = print_str)
+
+def release_memory() -> None:
+    """ 将全局变量model_in_memory赋值为None，让其失去对模型的引用，从而释放显存 """
+    global model_in_memory
+    model_in_memory = None
+    time.sleep(0.1)
+    gc.collect()
+    print("释放完成")
+    return None
 
 # 逗号分词器
 def comma_tokenizer(text: str) -> List[str]:
@@ -755,7 +795,7 @@ with gr.Blocks(css=css) as demo:
     global_dict_State["images_dir"] = images_dir
     """
     
-    with gr.Accordion(label="使用说明") as wd14_accordion:
+    with gr.Accordion(label="使用说明", open=False) as wd14_accordion:
         gr.Markdown("""
         # 基于booru风格的tag标签或者WD14提取的特征向量进行聚类
 
@@ -783,65 +823,147 @@ with gr.Blocks(css=css) as demo:
 
          tag_images_by_wd14_tagger来自[kohya](https://github.com/kohya-ss/sd-scripts/blob/main/finetune/tag_images_by_wd14_tagger.py)
         """)
+
+    ############################## 图片聚类 ##############################
+    with gr.Tab("cluseter"):
+        with gr.Box():
+            vectorize_X_and_label_State = gr.State(value=[])  # 用于存放特征向量，和其对应的tag
+            cluster_model_State = gr.State()  # 用于存放预处理中生成的聚类模型
+            preprocess_Markdown = gr.Markdown("**请先进行预处理再聚类**")
+            with gr.Row():
+                images_dir = gr.Textbox(label="图片目录")     
+            with gr.Row():
+                with gr.Column(scale=1):
+                    vectorizer_method_list = ["TfidfVectorizer", "CountVectorizer", "WD14"]
+                    vectorizer_method = gr.Dropdown(vectorizer_method_list, label="特征提取", value=vectorizer_method_list[0], type="index")
+                use_comma_tokenizer = gr.Checkbox(label="强制逗号分词", value=True, info="启用后则以逗号划分各个tag。不启用则同时以空格和逗号划分")
+                use_binary_tokenizer = gr.Checkbox(label="tag频率二值化", value=True, info="只考虑是否tag出现而不考虑出现次数")
+                vectorizer_button = gr.Button("确认预处理", variant="primary")
+            with gr.Row():
+                    cluster_model_list = ["K-Means聚类", "Spectral谱聚类", "Agglomerative层次聚类", "OPTICS聚类"]
+                    cluster_model = gr.Dropdown(cluster_model_list, label="聚类模型", value=cluster_model_list[0], type="index")
+        with gr.Box():
+            with gr.Row():
+                with gr.Accordion("聚类效果分析", open=True):
+                    with gr.Row():
+                        max_cluster_number = gr.Slider(2, MAX_GALLERY_NUMBER, step=1, value=10, label="分析时最大聚类数 / OPTICS-min_samples")
+                        cluster_analyse_button = gr.Button("开始分析")
+                    with gr.Row():
+                        Silhouette_gr_Plot = gr.LinePlot()
+                        Davies_gr_Plot = gr.LinePlot()
+                    with gr.Row():
+                        bset_cluster_number_DataFrame = gr.DataFrame(value=[],
+                                                                    label="根据轮廓曲线推荐的聚类数（y越大越好）",
+                                                                    visible=False
+                        )
+        with gr.Box():
+            with gr.Row():
+                with gr.Column(scale=2):
+                    confirmed_cluster_number = gr.Slider(2, MAX_GALLERY_NUMBER, step=1, value=2, label="聚类数n_cluster / OPTICS-min_samples")
+                with gr.Column(scale=1):
+                    use_cache = gr.Checkbox(label="使用缓存",info="如果cache目录内存在同名图片，则不会重新缓存(可能会造成图片显示不一致)")
+                
+                cluster_images_button = gr.Button("开始聚类并展示结果", variant="primary")
+        with gr.Row():
+            with gr.Accordion("聚类图片展示", open=True):
+                with gr.Row(visible=False) as confirm_cluster_Row:
+                    process_clusters_method_choices = ["重命名原图片(不推荐)","在Cluster文件夹下生成聚类副本(推荐)","移动原图至Cluster文件夹(大数据集推荐)"]
+                    process_clusters_method = gr.Radio(label="图片处理方式",
+                                                    value=process_clusters_method_choices[1],
+                                                    choices=process_clusters_method_choices,
+                                                    type="index",
+                    )
+                    confirm_cluster_button = gr.Button(value="确认聚类", elem_classes="attention")
+                gr_Accordion_and_Gallery_list = create_gr_gallery(MAX_GALLERY_NUMBER)
+
+    ############################## WD14模型使用 ##############################
+    with gr.Tab("WD14 - tagger"):
+
+        webui_model_dir_name = "wd14_tagger_model"  # webui中默认锁定的下载模型的目录
+        webui_model_dir = os.path.join(os.getcwd(), webui_model_dir_name)
+        if not os.path.exists(webui_model_dir):
+            os.mkdir(webui_model_dir)
+        
+        gr.Markdown(f"WebUI中下载的模型将会被存放在`{webui_model_dir}`目录下")
+        gr.Markdown(f"合理选择`batch_size`和`数据读取进程`可以加快推理速度")
         with gr.Row():
             wd14_finish_Textbox = gr.Textbox(label="模型使用完成提示", value="如果要使用WD14打标,在图片目录框填入路径后点击", visible=True)
             use_wd14_button = gr.Button("WD14模型打标", elem_classes="attention")
-
-
-    with gr.Box():
-        vectorize_X_and_label_State = gr.State(value=[])  # 用于存放特征向量，和其对应的tag
-        cluster_model_State = gr.State()  # 用于存放预处理中生成的聚类模型
-        preprocess_Markdown = gr.Markdown("**请先进行预处理再聚类**")
+            release_memory_button = gr.Button("释放内存或者显存中的模型")
         with gr.Row():
-            images_dir = gr.Textbox(label="图片目录")     
+            train_data_dir = gr.Textbox(label="Tagger目录", value="")
         with gr.Row():
-            with gr.Column(scale=1):
-                vectorizer_method_list = ["TfidfVectorizer", "CountVectorizer", "WD14"]
-                vectorizer_method = gr.Dropdown(vectorizer_method_list, label="特征提取", value=vectorizer_method_list[0], type="index")
-            use_comma_tokenizer = gr.Checkbox(label="强制逗号分词", value=True, info="启用后则以逗号划分各个tag。不启用则同时以空格和逗号划分")
-            use_binary_tokenizer = gr.Checkbox(label="tag频率二值化", value=True, info="只考虑是否tag出现而不考虑出现次数")
-            vectorizer_button = gr.Button("确认预处理", variant="primary")
+            repo_id = gr.Dropdown(["SmilingWolf/wd-v1-4-moat-tagger-v2"],
+                                label="repo_id",
+                                value="SmilingWolf/wd-v1-4-moat-tagger-v2",
+                                type="value"
+            )
+            force_download = gr.Checkbox(label="强制重新下载模型", value=False, info="如果模型已经存在，是否强制下载覆盖")
+            model_dir = gr.Textbox(label="模型下载目录", value=webui_model_dir, visible=False)
         with gr.Row():
-                cluster_model_list = ["K-Means聚类", "Spectral谱聚类", "Agglomerative层次聚类", "OPTICS聚类"]
-                cluster_model = gr.Dropdown(cluster_model_list, label="聚类模型", value=cluster_model_list[0], type="index")
-    with gr.Box():
+            batch_size = gr.Slider(label="batch_size", value=1, minimum=1, maximum=16, step=1, info="越大显存占用越大")
+            max_data_loader_n_workers = gr.Slider(label="多进程进行数据读取", value=0, minimum=0, maximum=16, step=1, info="设置成0则不启用，创建进程也有时间开销，建议30张以下就不要启用了")
         with gr.Row():
-            with gr.Accordion("聚类效果分析", open=True):
-                with gr.Row():
-                    max_cluster_number = gr.Slider(2, MAX_GALLERY_NUMBER, step=1, value=10, label="分析时最大聚类数 / OPTICS-min_samples")
-                    cluster_analyse_button = gr.Button("开始分析")
-                with gr.Row():
-                    Silhouette_gr_Plot = gr.LinePlot()
-                    Davies_gr_Plot = gr.LinePlot()
-                with gr.Row():
-                    bset_cluster_number_DataFrame = gr.DataFrame(value=[],
-                                                                 label="根据轮廓曲线推荐的聚类数（y越大越好）",
-                                                                 visible=False
-                    )
-    with gr.Box():
+            general_threshold = gr.Slider(label="general_threshold", value=0.35, minimum=0, maximum=1.0, step=0.01)
+            character_threshold = gr.Slider(label="character_threshold", value=0.35, minimum=0, maximum=1.0, step=0.01)
         with gr.Row():
-            with gr.Column(scale=2):
-                confirmed_cluster_number = gr.Slider(2, MAX_GALLERY_NUMBER, step=1, value=2, label="聚类数n_cluster / OPTICS-min_samples")
-            with gr.Column(scale=1):
-                use_cache = gr.Checkbox(label="使用缓存",info="如果cache目录内存在同名图片，则不会重新缓存(可能会造成图片显示不一致)")
-            
-            cluster_images_button = gr.Button("开始聚类并展示结果", variant="primary")
-    with gr.Row():
-        with gr.Accordion("聚类图片展示", open=True):
-            with gr.Row(visible=False) as confirm_cluster_Row:
-                process_clusters_method_choices = ["重命名原图片(不推荐)","在Cluster文件夹下生成聚类副本(推荐)","移动原图至Cluster文件夹(大数据集推荐)"]
-                process_clusters_method = gr.Radio(label="图片处理方式",
-                                                   value=process_clusters_method_choices[1],
-                                                   choices=process_clusters_method_choices,
-                                                   type="index",
-                )
-                confirm_cluster_button = gr.Button(value="确认聚类", elem_classes="attention")
-            gr_Accordion_and_Gallery_list = create_gr_gallery(MAX_GALLERY_NUMBER)
+            caption_extension = gr.Textbox(label="tag文件扩展名",
+                                           value=".txt",
+                                           info="如果你想使用聚类功能，扩展名因为设置为'.txt'",
+                                           placeholder=".txt"
+            )
+            undesired_tags = gr.Textbox(label="undesired_tags", value="", info="不想要的tag，用逗号分隔，不加空格", placeholder="tag0,tag1...")
+            remove_underscore = gr.Checkbox(label="remove_underscore", value=True, info="将tag中的下划线替换为空格")
+        gr.Markdown("**实验性功能**")
+        gr.Markdown("**并发推理似乎可以代替`多进程数据读取`，甚至其在小数据集情况下启动非常快，在使用时建议将`多进程数据读取`设置为0**")
+        gr.Markdown("**在从普通模式和TensorRT加速模式切换时，请先进行释放模型**")
+        with gr.Row():
+            concurrent_inference = gr.Checkbox(label="concurrent_inference",
+                                            value=False,
+                                            info="并发推理，可能会加快速度，可能会占用更多内存，建议在GPU模式使用"
+            )
+            tensorrt = gr.Checkbox(label="tensorrt", value=False, info="使用tensorrt加速，需要安装tensorrt,首次使用需要一段时间的编译模型")
+            tensorrt_batch_size = gr.Slider(label="tensorrt_batch_size",
+                                            value=2,
+                                            minimum=1,
+                                            maximum=8,
+                                            step=1,
+                                            info="编译后tensorrt模型所支持的最大batch_size，越大编译时间越长，不建议大于4; 改变后需要重新编译，不建议再次改变"
+            )
+        gr.Markdown("""冷启动，GTX2060：
+| 图片数量 | batch | 数据读取进程数 | 并发推理 | 耗时 |
+| --- | --- | --- | --- | --- |
+| 204 | 1batch | 0 | ❌ | 64s |
+| 204 | 4batch | 2 | ❌ | 51s |
+| 204 | 1batch | 0 | ✅ | 44s |
+| 204 | 4batch | 0 | ✅ | 28s |
+| 204 | 4batch | 2 | ✅ | 49s |
+""")
+        gr.Markdown("204张图片，热启动，tensor RT，4batch，不开多进程读取 = 2g显存占用，24s")
 
     # 使用wd14模型打标
     use_wd14_button.click(fn=use_wd14,
-                            inputs=images_dir,
-                            outputs=wd14_finish_Textbox,
+                            inputs=[train_data_dir,
+                                    repo_id,
+                                    force_download,
+                                    model_dir,
+                                    batch_size,
+                                    max_data_loader_n_workers,
+                                    general_threshold,
+                                    character_threshold,
+                                    caption_extension,
+                                    undesired_tags,
+                                    remove_underscore,
+                                    concurrent_inference,
+                                    tensorrt,
+                                    tensorrt_batch_size,
+                            ],
+                            outputs=[wd14_finish_Textbox],
+    )
+    # 释放内存或者显存中的模型
+    release_memory_button.click(fn=release_memory,
+                                inputs=[],
+                                outputs=[],
     )
     # 特征提取与模型选择
     vectorizer_button.click(fn=vectorizer,

@@ -7,7 +7,7 @@ import argparse
 import csv
 import glob
 import os
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 import gc
 import time
 import logging
@@ -173,7 +173,10 @@ Warning: Please clean up any old engine and profile cache files (.engine and .pr
 """)
     return Tensorrt_provider
 
-def main(args) -> None :
+def main(args,
+         session_in_memory: Union[None, ort.InferenceSession]
+) -> ort.InferenceSession :
+    
     # hf_hub_downloadをそのまま使うとsymlink関係で問題があるらしいので、キャッシュディレクトリとforce_filenameを指定してなんとかする
     # depreacatedの警告が出るけどなくなったらその時
     # https://github.com/toriato/stable-diffusion-webui-wd14-tagger/issues/22
@@ -240,31 +243,43 @@ def main(args) -> None :
 
     undesired_tags = set(args.undesired_tags.split(","))
 
-    # 配置执行者
-    providers =  ort.get_available_providers()
-    if len(providers) >= 2:
-        # 最后一个一般是CPU，倒数第二个一般是GPU
-        providers = providers[-2:] if torch.cuda.is_available() else [ providers[-1] ]
-    if args.tensorrt:
-        # 加入带缓存参数的TensorRT执行者
-        trt_engine_cache_path = os.path.join( os.path.dirname(onnx_model_path), "trt_engine_cache" )
-        providers = [ get_tensorrt_engine(trt_engine_cache_path, args.tensorrt_batch_size) ] + providers
-        print("#"*20)
-        print("\n")
-        print("使用TensorRT执行者,首次使用或者tensorrt_batch_side发生改变时，需要重新编译模型，耗时较久，请耐心等待，可以使用任务管理器跟踪显卡的使用")
-        print("\n")
-        print("#"*20)
-    print("可用设备")
-    for name in providers:
-        print(name)
+    def set_providers() -> list:
+        # 配置执行者
+        providers =  ort.get_available_providers()
+        if len(providers) >= 2:
+            # 最后一个一般是CPU，倒数第二个一般是GPU
+            providers = providers[-2:] if torch.cuda.is_available() else [ providers[-1] ]
+        if args.tensorrt:
+            # 加入带缓存参数的TensorRT执行者
+            trt_engine_cache_path = os.path.join( os.path.dirname(onnx_model_path), "trt_engine_cache" )
+            providers = [ get_tensorrt_engine(trt_engine_cache_path, args.tensorrt_batch_size) ] + providers
+            print("#"*20)
+            print("\n")
+            print("使用TensorRT执行者,首次使用或者tensorrt_batch_side发生改变时，需要重新编译模型，耗时较久，请耐心等待，可以使用任务管理器跟踪显卡的使用")
+            print("\n")
+            print("#"*20)
+        print("可用设备")
+        for name in providers:
+            print(name)
+        return providers
    
 
     # 载入模型
-    InferenceSession_time_start = time.time()
-    ort_session = ort.InferenceSession(onnx_model_path, providers=providers) # type: ignore
+    # 如果没有从外部传入一个已经在内存里的模型，则重新载入一个
+    if session_in_memory is None:
+        print("载入新的模型")
+        InferenceSession_time_start = time.time()
+        providers = set_providers()
+        ort_session = ort.InferenceSession(onnx_model_path, providers=providers) # type: ignore
+        print("载入模型用时", time.time() - InferenceSession_time_start, "秒")
+    # 从外部传入了一个已经在内存里的模型，则直接使用
+    else:
+        print("使用内存中的模型")
+        ort_session = session_in_memory
+    
     outputs_name_list = [x.name for x in ort_session.get_outputs()]
     inputs_name_list = [x.name for x in ort_session.get_inputs()]
-    print("载入模型用时", time.time() - InferenceSession_time_start, "秒")
+    
 
     assert len(inputs_name_list) == 1, "onnx模型输入层不止一个，可能你使用的模型不是本项目的模型"
     assert len(outputs_name_list) == MULTI_OUTPUT_NUMBER, f"onnx模型输出层不是{MULTI_OUTPUT_NUMBER}个，可能你使用的模型不是本项目的模型"
@@ -429,6 +444,10 @@ def main(args) -> None :
                 e_num += 1
                 continue
         print(f"Error count: {e_num}")
+    
+    # 释放线程池
+    if pool is not None:
+        pool.shutdown(wait=True)
 
     if args.frequency_tags:
         sorted_tags = sorted(tag_freq.items(), key=lambda x: x[1], reverse=True)
@@ -436,19 +455,10 @@ def main(args) -> None :
         for tag, freq in sorted_tags:
             print(f"{tag}: {freq}")
 
-    """不起作用
-    def _release(model):
-        del model
-        clear_session()  # 释放模型
-        try:
-            torch.cuda.empty_cache() # 释放显存
-        except:
-            logging.warning("释放显存失败，可能是因为没有显卡")
-        gc.collect()
-    _release(model)
-    """
-
     print("done!")
+
+    # 如果是API调用，则返回ort客户端，方便保存模型在显存中，能够快速下一次推理
+    return ort_session
 
 
 def setup_parser() -> argparse.ArgumentParser:

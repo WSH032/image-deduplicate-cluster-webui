@@ -196,7 +196,11 @@ def cancel(delet_images_str: str) -> Tuple[str, dict, dict]:
     
     return toml.dumps(delet_images_dict), gr_confirm_button, gr_cancel_button
 
-def delet(duplicates_images_gallery: Tuple[str, str], delet_images_str: str):
+# https://github.com/WSH032/image-deduplicate-cluster-webui/issues/1
+# gradio似乎无法正常识别函数注解，暂时注释掉
+def delet(duplicates_images_gallery,  # Tuple[str, str]
+          delet_images_str,  # str
+):
     
     """
     output=[duplicates_images_gallery, delet_images_str]
