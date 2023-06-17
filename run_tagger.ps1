@@ -6,7 +6,7 @@ $model_dir = "wd14_tagger_model"    # wd14 tagger 模型的下载目录 | direct
 # 选取合适的batch_size和max_data_loader_n_workers，使显存占用率在80%，可以获取最高的速度 |
 # batch_size and max_data_loader_n_workers should be set to make GPU memory usage at 80% to get the highest speed
 $batch_size = 1    # GPU # 推理时的 batch size，取绝与你的显存大小，6g显存可以选4，4g显存选2 | batch size in inference,  6g GPU memory can choose 4, 4g memory can choose 2
-$max_data_loader_n_workers = 2    # CPU # 载入数据集的线程数，2/4 | number of threads to load the dataset, 2/4
+$max_data_loader_n_workers = 2    # CPU # 设置成0则不启用，载入数据集的线程数，2/4 | set to 0 to disable, number of threads to load dataset, 2/4
 
 $caption_extension = ".txt"    # 标注文件的扩展名，聚类需要txt格式 | extension of caption file, clustering needs txt format
 $general_threshold = 0.35    # 一般标签的阈值，对tag聚类有影响，对wd向量聚类无影响 | threshold of confidence to add a tag for general category
@@ -19,6 +19,15 @@ $force_download = 0    # 是否强制重新下载模型 | whether to force to do
 
 
 ###### 实验性功能 ######
+
+<#
+############
+可以运行 .\utils\run_install_tensorrt_lib.ps1 完成tensorrt的安装
+专为 TensorRT 8.6 GA for Windows 10 and CUDA 11.0, 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 11.7 and 11.8 编写
+不满足Win10条件的请阅读 https://docs.nvidia.com/deeplearning/tensorrt/install-guide/index.html 完成安装
+############
+#>
+
 # 是否在读取数据的时候同时进行推理，开启可能会加快速度，但是会增加RAM内存占用，建议在GPU模式下使用 |
 # whether to perform inference while reading data, which may speed up the process, but will increase the RAM memory usage, it is recommended to use in GPU mode
 $concurrent_inference = 0

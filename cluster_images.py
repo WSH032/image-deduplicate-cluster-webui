@@ -159,9 +159,9 @@ def vectorizer(images_dir: str,
         # 选择特征提取器
         
         if vectorizer_method == 0 :
-            tfvec = skt.TfidfVectorizer(**vectorizer_args_dict)
+            tfvec = skt.TfidfVectorizer(**vectorizer_args_dict) # type: ignore
         elif vectorizer_method == 1 :
-            tfvec = skt.CountVectorizer(**vectorizer_args_dict)
+            tfvec = skt.CountVectorizer(**vectorizer_args_dict) # type: ignore
 
         # tag内容, 用于文本提取
         tag_content_list = searcher.tag_content(error_then_tag_is="_no_tag")
@@ -233,7 +233,7 @@ def vectorizer(images_dir: str,
         
     else:
         logging.error("特征提取方法选择出错， 默认选择 tfidf 提取方法")
-        tfvec = skt.TfidfVectorizer(**vectorizer_args_dict)
+        tfvec = skt.TfidfVectorizer(**vectorizer_args_dict) # type: ignore
         # tag内容, 用于文本提取
         tag_content_list = searcher.tag_content(error_then_tag_is="_no_tag")
         # tags转为向量特征
@@ -810,11 +810,11 @@ with gr.Blocks(css=css) as demo:
          - 要求目录下存在一个`wd14_vec_tag.wd14.txt`文件，里面记录了每个特征向量对应的tag
         
          ## WD14模型使用
-         你可以打开并修改`run_tagger.ps1`同时完成上述两个准备，该脚本采用友好交互编写
+          - 你可以打开并修改`run_tagger.ps1`同时完成上述两个准备，该脚本采用友好交互编写
 
-         你也可以填入`图片目录`，然后按下这个按钮使用默认参数等效运行这个脚本
-          - 首次运行会下载WD14模型，可能需要等待一段时间
-          - 运行时候也需要等待，请去终端查看输出
+          - 你也可以在`WD14 - tagger`选项卡中完成这个过程，两者是一样的
+            - 首次运行会下载WD14模型，可能需要等待一段时间
+            - 运行时候也需要等待，请去终端查看输出
 
          ## Credits
          我不训练模型，WD14模型来自于这个项目[SmilingWolf/WD14](https://huggingface.co/SmilingWolf)
@@ -917,6 +917,11 @@ with gr.Blocks(css=css) as demo:
         gr.Markdown("**实验性功能**")
         gr.Markdown("**并发推理似乎可以代替`多进程数据读取`，甚至其在小数据集情况下启动非常快，在使用时建议将`多进程数据读取`设置为0**")
         gr.Markdown("**在从普通模式和TensorRT加速模式切换时，请先进行释放模型**")
+        def show_tensorrt_install_info():
+            __my_dir__ = os.path.dirname( os.path.abspath(__file__) )
+            abs_install_tensortrt_ps1_path = os.path.join(__my_dir__, "utils", "run_install_tensorrt_lib.ps1")
+            return f"**Win10用户可以运行 [{abs_install_tensortrt_ps1_path}]({abs_install_tensortrt_ps1_path}) 完成tensorrt的安装**"
+        gr.Markdown( show_tensorrt_install_info() )
         with gr.Row():
             concurrent_inference = gr.Checkbox(label="concurrent_inference",
                                             value=False,

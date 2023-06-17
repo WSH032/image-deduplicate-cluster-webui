@@ -173,8 +173,12 @@ Warning: Please clean up any old engine and profile cache files (.engine and .pr
 """)
     return Tensorrt_provider
 
+"""
+或许我们可以把session_in_memory用全局变量代替，而不是使用传入参数
+这样在import调用的时候，可以用类似为类属性赋值的方法来释放模型
+"""
 def main(args,
-         session_in_memory: Union[None, ort.InferenceSession]
+         session_in_memory: Optional[ort.InferenceSession] = None,
 ) -> ort.InferenceSession :
     
     # hf_hub_downloadをそのまま使うとsymlink関係で問題があるらしいので、キャッシュディレクトリとforce_filenameを指定してなんとかする
