@@ -24,6 +24,17 @@
 
 ## Change History
 如果你不会使用git命令，可以运行`update.ps1`完成更新
+### 19 Jun.2023 2023/06/19
+new:
+ - 现在支持做为[AUTOMATIC1111/stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui)的扩展使用
+    - **请尽量在`gradio>=3.31.0`的版本下使用，此扩展在 2023年第22周 [`SD-WebUI v1.3.1`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/commit/b6af0a3809ea869fb180633f9affcae4b199ffcf)下经过测试**
+   >`https://github.com/WSH032/kohya-config-webui.git`
+   >
+   >将这个仓库连接复制到SD-WebUi的`扩展 extensions`->`从网址安装 Install from URL`界面下载完成后，**重启SD-WebUI**即可，会自动安装所需依赖
+   - 中国区用户可尝试用`https://ghproxy.com/https://github.com/WSH032/kohya-config-webui.git`代理加速下载
+   - 在SD-WebUI中使用本扩展的`WD14tagger`功能时，若出现**模型下载失败**情况，可以按照本扩展WebUI内的指示从`https://huggingface.co/SmilingWolf/wd-v1-4-moat-tagger-v2`手动下载模型并放入WebUI内指定的文件夹中
+   - tensorrt自动增量脚本[utils/run_install_tensorrt_lib.ps1](utils/run_install_tensorrt_lib.ps1)在此仓库做为扩展使用时不被支持，但你仍可以自行手动安装tensorrt环境来使用加速功能
+
 ### 18 Jun.2023 2023/06/18
 new:
  - 增加自动安装tensorrt的脚本，请运行[utils/run_install_tensorrt_lib.ps1](utils/run_install_tensorrt_lib.ps1)完成傻瓜式安装
@@ -31,17 +42,28 @@ new:
    - 为 torch cuda 增量包
    - 不满足Win10环境条件的请阅读[docs.nvidia](https://docs.nvidia.com/deeplearning/tensorrt/install-guide/index.html)完成安装
 
-### 6 Jun.2023 2023/06/6
-new:
- - 增加WebUI中WD14-tagger的UI界面，支持与`run_tagger.ps1`几乎一样的参数设置，详细请看[wd14_show_0](./docs/wd14_show_0.png)
-
-bugfix:
- - 注释掉类型注解，以解决[1#issue](https://github.com/WSH032/image-deduplicate-cluster-webui/issues/1)
-
 ### 以前的更新内容请查看[CHANGELOG.md](CHANGELOG.md)
 
 ## 安装 Install
 
+### （一）做为[AUTOMATIC1111/stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui)的扩展使用
+
+**请尽量在`gradio>=3.31.0`的版本下使用，此扩展在 2023年第22周 [`SD-WebUI v1.3.1`](https://github.com/AUTOMATIC1111/stable-diffusion-webui/commit/b6af0a3809ea869fb180633f9affcae4b199ffcf)下经过测试**
+
+`https://github.com/WSH032/kohya-config-webui.git`
+
+将这个仓库连接复制到SD-WebUi的`扩展 extensions`->`从网址安装 Install from URL`界面下载完成后，**重启SD-WebUI**即可，会自动安装所需依赖
+
+ - 中国区用户可尝试用`https://ghproxy.com/https://github.com/WSH032/kohya-config-webui.git`代理加速下载
+ - 在SD-WebUI中使用本扩展的`WD14tagger`功能时，若出现**模型下载失败**情况，可以按照本扩展WebUI内的指示从`https://huggingface.co/SmilingWolf/wd-v1-4-moat-tagger-v2`手动下载模型并放入WebUI内指定的文件夹中
+ - tensorrt自动增量脚本[utils/run_install_tensorrt_lib.ps1](utils/run_install_tensorrt_lib.ps1)在此仓库做为扩展使用时不被支持，但你仍可以自行手动安装tensorrt环境来使用加速功能
+
+ #### 关于依赖环境
+ 做为SD-WebUI扩展使用时，会**自动安装和使用SD-WebUI的依赖环境**，**本项目的三个模块都会被安装**,不需要任何操作
+
+ 首次安装时，中国区用户可能会因网络原因安装较久，请耐心等待
+
+### （二）独立使用
 **在python3.9下完成编写，可能之前版本也可以使用，不保证**
 
 这个项目被分为三个模块
@@ -57,7 +79,7 @@ bugfix:
 
 ![install](./docs/install.png)
 
-### 安装Tips
+#### 独立使用安装Tips
 对于WD14 模型的使用，可以进行CPU或者GPU的推理，其中GPU的推理速度快，但是要求cuda环境
 
 运行`install.ps1`时会提问你是否需要安装`Torch==2.0.0 + cuda118`
@@ -65,6 +87,18 @@ bugfix:
 如果你配置过系统级的cuda环境，或者你不需要使用WD14模型的GPU推理，可以选择否
 
 如果你需要进行WD14 tagger的GPU推理，你可以选择Y进行`Torch==2.0.0 + cuda118`的安装，其能够在虚拟环境中配置cuda环境
+
+### （最后）关于WD14模型下载失败
+可以从`https://huggingface.co/SmilingWolf/wd-v1-4-moat-tagger-v2`按照下述结构，手动下载模型
+```
+< your-model-download-dir > /
+├── variables /
+│   ├── variables.data-00000-of-00001
+│   └── variables.index
+├── keras_metadata.pb
+├── saved_model.pb
+└── selected_tags.csv
+```
 
 ## 使用Tips
 ### 图片查重
@@ -112,7 +146,7 @@ bugfix:
 
 - [ ] 在Colab上部署
 - [x] 完成本地部署封装
-- [ ] 完成A111-SD-WebUI部署
+- [x] 完成A111-SD-WebUI部署
 - [x] 增加WD14提取特征和生成tags文本
 	- [x] 使用WD14生成特征向量到npz文件，避免多次聚类时重复运行耗时
 	- [x] 增加释放模型功能

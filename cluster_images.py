@@ -55,6 +55,19 @@ CACHE_RESOLUTION = 256  # 缓存图片时最大分辨率
 model_in_memory = None  # Union[None, ort.InferenceSession]
 
 
+def use_wd14_exception_wrapper(func) -> Callable:
+    """
+    用于处理use_wd14函数的异常
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logging.exception(f"{func.__name__}函数出现了异常: {e}")
+            return gr.update(value = f"出现了异常: {e}")
+    return wrapper
+
+@use_wd14_exception_wrapper
 # 运行这个可以启动WD14 tagger脚本来打标
 def use_wd14(train_data_dir: str,
                 repo_id: str,
@@ -942,8 +955,23 @@ with gr.Blocks(css=css) as demo:
         if not os.path.exists(webui_model_dir):
             os.mkdir(webui_model_dir)
         
-        gr.Markdown(f"**WebUI中下载的模型将会被存放在`{webui_model_dir}`目录下**")
-        gr.Markdown(f"合理选择`batch_size`和`数据读取进程`可以加快推理速度")
+        gr.Markdown(f"""
+                    **首次使用会自动下载并编译模型，耗时较久，请耐心等待**
+
+                    **出现网络问题，你也可以手动下载[https://huggingface.co/SmilingWolf/wd-v1-4-moat-tagger-v2](https://huggingface.co/SmilingWolf/wd-v1-4-moat-tagger-v2)中下述相应内容并放入`{webui_model_dir}`目录内**
+
+                     ```
+                    {webui_model_dir}{os.path.sep}
+                    ├── variables{os.path.sep}
+                    │   ├── variables.data-00000-of-00001
+                    │   └── variables.index
+                    ├── keras_metadata.pb
+                    ├── saved_model.pb
+                    └── selected_tags.csv
+                    ```
+
+                    **合理选择`batch_size`和`数据读取进程`可以加快推理速度**
+                    """)
         with gr.Row():
             wd14_finish_Textbox = gr.Textbox(label="模型使用完成提示", value="如果要使用WD14打标,在图片目录框填入路径后点击", visible=True)
             use_wd14_button = gr.Button("WD14模型打标", elem_classes="attention")

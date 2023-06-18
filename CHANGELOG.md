@@ -1,3 +1,10 @@
+### 6 Jun.2023 2023/06/6
+new:
+ - 增加WebUI中WD14-tagger的UI界面，支持与`run_tagger.ps1`几乎一样的参数设置，详细请看[wd14_show_0](./docs/wd14_show_0.png)
+
+bugfix:
+ - 注释掉类型注解，以解决[1#issue](https://github.com/WSH032/image-deduplicate-cluster-webui/issues/1)
+
 ### 5 Jun.2023 2023/06/05
 **因为添加tf2onnx库的相关代码，需要更新依赖，请再次运行`install.ps1`完成更新**
 
