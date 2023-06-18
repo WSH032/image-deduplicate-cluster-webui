@@ -57,6 +57,7 @@ new:
  - 中国区用户可尝试用`https://ghproxy.com/https://github.com/WSH032/kohya-config-webui.git`代理加速下载
  - 在SD-WebUI中使用本扩展的`WD14tagger`功能时，若出现**模型下载失败**情况，可以按照本扩展WebUI内的指示从`https://huggingface.co/SmilingWolf/wd-v1-4-moat-tagger-v2`手动下载模型并放入WebUI内指定的文件夹中
  - tensorrt自动增量脚本[utils/run_install_tensorrt_lib.ps1](utils/run_install_tensorrt_lib.ps1)在此仓库做为扩展使用时不被支持，但你仍可以自行手动安装tensorrt环境来使用加速功能
+![Install-SD-WebUI-extension](https://github.com/WSH032/image-deduplicate-cluster-webui/assets/126865849/0b5d628f-91f4-471f-bf0f-e56965193446)
 
  #### 关于依赖环境
  做为SD-WebUI扩展使用时，会**自动安装和使用SD-WebUI的依赖环境**，**本项目的三个模块都会被安装**,不需要任何操作
@@ -101,6 +102,12 @@ new:
 ```
 
 ## 使用Tips
+### SD-WebUI内使用演示
+与独立使用方法相同
+ - [SD-WebUI 查重演示](https://github.com/WSH032/image-deduplicate-cluster-webui/assets/126865849/a4ad9926-8ee4-47d9-9f5a-bd2a3515563f)
+ - [SD-WebUI 聚类演示](https://github.com/WSH032/image-deduplicate-cluster-webui/assets/126865849/f62fb1a6-88a6-4aad-8071-16b2f22dd248)
+ - [SD-WebUI WD14演示](https://github.com/WSH032/image-deduplicate-cluster-webui/assets/126865849/0dc9ed5e-8d6b-4f3c-b383-620ceaf7d715)
+
 ### 图片查重
 图片查重不依赖任何tag文本或者WD14模型
 
