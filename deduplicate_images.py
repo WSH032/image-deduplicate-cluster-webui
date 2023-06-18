@@ -5,7 +5,18 @@ Created on Fri May  5 17:38:31 2023
 @author: WSH
 """
 
+"""
+注意！！！
+如果WebUI开启queue（也可能是SD-WebUI用了FastAPI？）
+出错时会无限等待结果，但是出错时是不会有结果返回的
+所以需要处理按钮交互的异常
 
+这里采用的方式是为每个按钮函数添加一个错误处理的装饰器
+各装饰器的放回值依据各函数的返回值而定
+    其实最好的方法应该是把原输出接在输入函数后面，若出现异常就放回原值就行
+
+可以使用from utils.utils import webui_error_default_wrapper
+"""
 
 import gradio as gr
 from imagededup.methods import PHash
@@ -27,8 +38,28 @@ images_info_list = []  # list[dict] 用于记录重复图片的属性信息
 duplicates = {}  # Dict[str, List] 记录最原始的查重结果，将用于自动选择的启发式算法
 
 
+def find_duplicates_images_error_wrapper(func: Callable) -> Callable:
+    """ 用于处理find_duplicates_images的异常 """
+    def wrapper(*args):
+        try:
+            return func(*args)
+        except Exception as e:
+            logging.exception(f"{func.__name__}函数出现了异常: {e}")
+            return None, f"发生了错误: {e}"
+    return wrapper
 
-def find_duplicates_images(images_dir: str, use_cache:bool):
+"""
+# 这个无法在WebUI中显示具体错误
+from utils.utils import webui_error_default_wrapper
+@webui_error_default_wrapper( (None, f"发生了错误，请查看控制台输出信息") )
+"""
+@find_duplicates_images_error_wrapper
+def find_duplicates_images(images_dir: str,
+                           use_cache:bool,
+    ):
+    """
+    outputs=[duplicates_images_gallery, delet_images_str]
+    """
     
     global confirmed_images_dir, cluster_list, images_info_list
     
@@ -137,7 +168,13 @@ def find_duplicates_images(images_dir: str, use_cache:bool):
     # delet_images_str = toml.dumps(delet_images_dict)
     # return images_tuple_list, delet_images_str
     
-    return images_tuple_list, ""
+    if not images_tuple_list:
+        no_duplicates_str = "没有重复图像！！！"
+        print(no_duplicates_str)
+        return images_tuple_list, no_duplicates_str
+    else:
+        print(f"共有{len(images_tuple_list)}张重复图像")
+        return images_tuple_list, ""
     
 
 
@@ -370,8 +407,11 @@ def get_choose_image_index(evt: gr.SelectData, delet_images_str: str):
     
     return gr_confirm_button, gr_cancel_button, image_info_json
 
+css = """
+.attention {color: red  !important}
+"""
 
-with gr.Blocks(css="#delet_button {color: red}") as demo:
+with gr.Blocks(css=css) as demo:
     with gr.Row():
         with gr.Column(scale=10):
             images_dir = gr.Textbox(label="图片目录")
@@ -388,7 +428,7 @@ with gr.Blocks(css="#delet_button {color: red}") as demo:
             with gr.Row():
                 image_info_json = gr.JSON()
         with gr.Column(scale=1):
-            delet_button = gr.Button("删除（不可逆）", elem_id="delet_button")
+            delet_button = gr.Button("删除（不可逆）", elem_classes="attention")
             auto_select_button = gr.Button("自动选择")
             all_select_button = gr.Button("全部选择")
             delet_images_str = gr.Textbox(label="待删除列表（手动编辑时请保证toml格式的正确）")
@@ -396,7 +436,7 @@ with gr.Blocks(css="#delet_button {color: red}") as demo:
     # 按下后，在指定的目录搜索重复图像，并返回带标签的重复图像路径
     find_duplicates_images_button.click(fn=find_duplicates_images,
                                         inputs=[images_dir, use_cache],
-                                        outputs=[duplicates_images_gallery, delet_images_str]
+                                        outputs=[duplicates_images_gallery, delet_images_str],
                                         )
 
     # 点击一个图片后，记录该图片标签于全局变量choose_image_index，并且把按钮更名为该标签;同时显示该图片分辨率等信息

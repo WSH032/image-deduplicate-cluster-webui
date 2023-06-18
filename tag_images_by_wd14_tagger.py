@@ -2,6 +2,13 @@
 
 # from https://github.com/kohya-ss/sd-scripts/blob/16e5981d3153ba02c34445089b998c5002a60abc/finetune/tag_images_by_wd14_tagger.py
 
+"""
+！！！！！！
+注意，因为编译模型是在子进程中进行的
+所以需要保证sys.path包含这个.py文件的目录
+如果是在SD-WebUI中运行，需要在preload.py中添加此py文件所在目录到sys.path
+    已经完成了这一点，但是如果此文件位置发生改变，需要修改preload.py中的目录
+"""
 
 import argparse
 import csv

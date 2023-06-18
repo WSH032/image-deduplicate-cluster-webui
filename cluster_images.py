@@ -5,6 +5,19 @@ Created on Fri May  5 17:38:31 2023
 @author: WSH
 """
 
+"""
+注意！！！
+如果WebUI开启queue（也可能是SD-WebUI用了FastAPI？）
+出错时会无限等待结果，但是出错时是不会有结果返回的
+所以需要处理按钮交互的异常
+
+这里采用的方式是为每个按钮函数添加一个错误处理的装饰器
+各装饰器的放回值依据各函数的返回值而定
+    其实最好的方法应该是把原输出接在输入函数后面，若出现异常就放回原值就行
+
+可以使用from utils.utils import webui_error_default_wrapper
+"""
+
 # 导入所需的库
 import sklearn.cluster as skc
 import sklearn.feature_extraction.text as skt
@@ -122,6 +135,19 @@ def comma_tokenizer(text: str) -> List[str]:
     return [tag.strip() for tag in text.split(',')]
 
 
+def vectorizer_exception_wrapper(func) -> Callable:
+    """
+    用于处理vectorizer函数的异常
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logging.exception(f"{func.__name__}函数出现了异常: {e}")
+            return None, None, f"预处理出错: {e}"
+    return wrapper
+
+@vectorizer_exception_wrapper
 def vectorizer(images_dir: str,
                vectorizer_method: int,
                use_comma_tokenizer: bool,
@@ -141,10 +167,9 @@ def vectorizer(images_dir: str,
     cluster_model为聚类模型
         0，1，2...等分别对应不同的聚类模型
     
-    return vectorize_X_and_label_State=[X, tf_tags_list]
+    vectorize_X_and_label_State=[X, tf_tags_list]
+    outputs=[vectorize_X_and_label_State, cluster_model_State, preprocess_Markdown]
     """
-
-
 
     # 实例化搜索器
     searcher = SearchImagesTags(images_dir, tag_file_ext=".txt")
@@ -296,9 +321,25 @@ def vectorizer(images_dir: str,
     
 
     return [X, tf_tags_list], cluster_model_State, "预处理完成" + title_str
-    
 
 
+def cluster_images_exception_wrapper(func) -> Callable:
+    """
+    用于处理cluster_image函数的异常
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logging.exception(f"{func.__name__}函数出现了异常: {e}")
+            # 需要乘2，这是因为gr_Accordion_and_Gallery_list既含有标题，又含有图片
+            gr_Accordion_and_Gallery_list = []
+            for i in range(MAX_GALLERY_NUMBER):
+                gr_Accordion_and_Gallery_list.extend( [gr.update(visible=False), gr.update(value=None)] )
+            return gr_Accordion_and_Gallery_list + [gr.update(visible=False)] + [gr.update(value={})]
+    return wrapper
+
+@cluster_images_exception_wrapper
 def cluster_images(images_dir: str,
                    confirmed_cluster_number: int,
                    use_cache: bool,
@@ -310,6 +351,8 @@ def cluster_images(images_dir: str,
     对指定目录下的图片进行聚类，将会使用该目录下与图片同名的txt中的tag做为特征
     confirmed_cluster_number为指定的聚类数
     如果use_cache为真，则会把图片拷贝到指定目录下的cache文件夹，并显示缩略图
+
+    outputs=gr_Accordion_and_Gallery_list + [confirm_cluster_Row] + [global_dict_State]
     """
     
     # 实例化搜索器
@@ -518,7 +561,7 @@ def cluster_images(images_dir: str,
         prompt = cluster_feature_tags_list[i].get("prompt", [])
         negetive = cluster_feature_tags_list[i].get("negetive", [])
         visible_gr_gallery_list.extend( [gr.update( visible=True, label=f"聚类{i} :\nprompt: {prompt}\nnegetive: {negetive}" ),
-                                         gr.update( value=gallery_images_tuple_list, visible=True)
+                                        gr.update( value=gallery_images_tuple_list, visible=True)
                                         ] 
         )
         
@@ -527,11 +570,26 @@ def cluster_images(images_dir: str,
     return visible_gr_gallery_list + unvisible_gr_gallery_list + [gr.update(visible=True)] + [global_dict_State]
 
 
+def cluster_analyse_exception_wrapper(func) -> Callable:
+    """
+    用于处理cluster_analyse函数的异常
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logging.exception(f"{func.__name__}函数出现了异常: {e}")
+            return [None, None, None]
+    return wrapper
+
+@cluster_analyse_exception_wrapper
 def cluster_analyse(images_dir: str, max_cluster_number: int, vectorize_X_and_label_State:list, cluster_model_State):
     """
     读取指定路径下的图片，并依据与图片同名的txt内的tags进行聚类
     将评估从聚类数从 2~max_cluster_number 的效果
     返回matplotlib类型的肘部曲线和轮廓系数
+
+    outputs=[Silhouette_gr_Plot, Davies_gr_Plot, bset_cluster_number_DataFrame]
     """
     
     """
@@ -852,7 +910,7 @@ with gr.Blocks(css=css) as demo:
                         Silhouette_gr_Plot = gr.LinePlot()
                         Davies_gr_Plot = gr.LinePlot()
                     with gr.Row():
-                        bset_cluster_number_DataFrame = gr.DataFrame(value=[],
+                        bset_cluster_number_DataFrame = gr.DataFrame(value=None,
                                                                     label="根据轮廓曲线推荐的聚类数（y越大越好）",
                                                                     visible=False
                         )
@@ -884,7 +942,7 @@ with gr.Blocks(css=css) as demo:
         if not os.path.exists(webui_model_dir):
             os.mkdir(webui_model_dir)
         
-        gr.Markdown(f"WebUI中下载的模型将会被存放在`{webui_model_dir}`目录下")
+        gr.Markdown(f"**WebUI中下载的模型将会被存放在`{webui_model_dir}`目录下**")
         gr.Markdown(f"合理选择`batch_size`和`数据读取进程`可以加快推理速度")
         with gr.Row():
             wd14_finish_Textbox = gr.Textbox(label="模型使用完成提示", value="如果要使用WD14打标,在图片目录框填入路径后点击", visible=True)
