@@ -46,6 +46,62 @@ $tensorrt_batch_size = 2
 
 
 
+########## 也可以手动从这里下载模型 | Can download model manually here ##########
+
+<#
+
+  https://huggingface.co/SmilingWolf/wd-v1-4-moat-tagger-v2
+
+  < model_dir > /
+  ├── variables /
+  │   ├── variables.data-00000-of-00001
+  │   └── variables.index
+  ├── keras_metadata.pb
+  ├── saved_model.pb
+  └── selected_tags.csv
+
+#>
+
+########## 更多参数 | more parameters ##########
+
+<#
+
+    "train_data_dir", type=str, help="directory for train images / 学習画像データのディレクトリ")
+
+    "--repo_id", type=str, default=DEFAULT_WD14_TAGGER_REPO, help="repo id for wd14 tagger on Hugging Face / Hugging Faceのwd14 taggerのリポジトリID")
+    
+    "--model_dir", type=str, default="wd14_tagger_model", help="directory to store wd14 tagger model / wd14 taggerのモデルを格納するディレクトリ",)
+    
+    "--force_download", action="store_true", help="force downloading wd14 tagger models / wd14 taggerのモデルを再ダウンロードします")
+    
+    "--batch_size", type=int, default=1, help="batch size in inference / 推論時のバッチサイズ")
+    
+    "--max_data_loader_n_workers", type=int, default=None, help="enable image reading by DataLoader with this number of workers (faster) / DataLoaderによる画像読み込みを有効にしてこのワーカー数を適用する（読み込みを高速化）",)
+    
+    "--caption_extension", type=str, default=".txt", help="extension of caption file / 出力されるキャプションファイルの拡張子")
+    
+    "--general_threshold", type=float, default=None, help="threshold of confidence to add a tag for general category, same as --thresh if omitted / generalカテゴリのタグを追加するための確信度の閾値、省略時は --thresh と同じ",)
+    
+    "--character_threshold", type=float, default=None, help="threshold of confidence to add a tag for character category, same as --thres if omitted / characterカテゴリのタグを追加するための確信度の閾値、省略時は --thresh と同じ",)
+    
+    "--recursive", action="store_true", help="search for images in subfolders recursively / サブフォルダを再帰的に検索する")
+    
+    "--remove_underscore", action="store_true", help="replace underscores with spaces in the output tags / 出力されるタグのアンダースコアをスペースに置き換える",)
+    
+    "--debug", action="store_true", help="debug mode")
+    
+    "--undesired_tags", type=str, default="", help="comma-separated list of undesired tags to remove from the output / 出力から除外したいタグのカンマ区切りのリスト",)
+    
+    "--frequency_tags", action="store_true", help="Show frequency of tags for images / 画像ごとのタグの出現頻度を表示する")
+    
+    "--concurrent_inference", action="store_true", help="Concurrently read dataset and inference, may increase RAM usage, recommend to use in GPU mode / 并发的进行数据集读取和模型推理，可能会增加RAM占用，建议在GPU模式下使用")
+    
+    "--tensorrt", action="store_true", help="Use TensorRT for inference, it is recommended to specify tensorrt_batch_size explicitly at the same time / 使用TensorRT进行推理,建议同时现式的指定tensorrt_batch_size")
+    
+    "--tensorrt_batch_size", type=int, default=2, help="Max batch size for TensorRT model compilation, the larger the longer the compilation time, not recommended to be greater than 4, can be different with batch_size / TensorRT模型编译时所需要支持的最大batch size，越大编译时间越长，不建议大于4； 可以与batch_size不同")
+
+#>
+
 ########## 不要修改 | do not edit ##########
 .\venv\Scripts\activate
 
@@ -87,43 +143,3 @@ python tag_images_by_wd14_tagger.py `
   $ext_args
   
 pause
-
-########## 更多参数 | more parameters ##########
-
-<#
-
-    "train_data_dir", type=str, help="directory for train images / 学習画像データのディレクトリ")
-
-    "--repo_id", type=str, default=DEFAULT_WD14_TAGGER_REPO, help="repo id for wd14 tagger on Hugging Face / Hugging Faceのwd14 taggerのリポジトリID")
-    
-    "--model_dir", type=str, default="wd14_tagger_model", help="directory to store wd14 tagger model / wd14 taggerのモデルを格納するディレクトリ",)
-    
-    "--force_download", action="store_true", help="force downloading wd14 tagger models / wd14 taggerのモデルを再ダウンロードします")
-    
-    "--batch_size", type=int, default=1, help="batch size in inference / 推論時のバッチサイズ")
-    
-    "--max_data_loader_n_workers", type=int, default=None, help="enable image reading by DataLoader with this number of workers (faster) / DataLoaderによる画像読み込みを有効にしてこのワーカー数を適用する（読み込みを高速化）",)
-    
-    "--caption_extension", type=str, default=".txt", help="extension of caption file / 出力されるキャプションファイルの拡張子")
-    
-    "--general_threshold", type=float, default=None, help="threshold of confidence to add a tag for general category, same as --thresh if omitted / generalカテゴリのタグを追加するための確信度の閾値、省略時は --thresh と同じ",)
-    
-    "--character_threshold", type=float, default=None, help="threshold of confidence to add a tag for character category, same as --thres if omitted / characterカテゴリのタグを追加するための確信度の閾値、省略時は --thresh と同じ",)
-    
-    "--recursive", action="store_true", help="search for images in subfolders recursively / サブフォルダを再帰的に検索する")
-    
-    "--remove_underscore", action="store_true", help="replace underscores with spaces in the output tags / 出力されるタグのアンダースコアをスペースに置き換える",)
-    
-    "--debug", action="store_true", help="debug mode")
-    
-    "--undesired_tags", type=str, default="", help="comma-separated list of undesired tags to remove from the output / 出力から除外したいタグのカンマ区切りのリスト",)
-    
-    "--frequency_tags", action="store_true", help="Show frequency of tags for images / 画像ごとのタグの出現頻度を表示する")
-    
-    "--concurrent_inference", action="store_true", help="Concurrently read dataset and inference, may increase RAM usage, recommend to use in GPU mode / 并发的进行数据集读取和模型推理，可能会增加RAM占用，建议在GPU模式下使用")
-    
-    "--tensorrt", action="store_true", help="Use TensorRT for inference, it is recommended to specify tensorrt_batch_size explicitly at the same time / 使用TensorRT进行推理,建议同时现式的指定tensorrt_batch_size")
-    
-    "--tensorrt_batch_size", type=int, default=2, help="Max batch size for TensorRT model compilation, the larger the longer the compilation time, not recommended to be greater than 4, can be different with batch_size / TensorRT模型编译时所需要支持的最大batch size，越大编译时间越长，不建议大于4； 可以与batch_size不同")
-
-#>
