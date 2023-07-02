@@ -15,7 +15,7 @@ Created on Fri May  5 17:38:31 2023
 各装饰器的放回值依据各函数的返回值而定
     其实最好的方法应该是把原输出接在输入函数后面，若出现异常就放回原值就行
 
-可以使用from utils.utils import webui_error_default_wrapper
+可以使用from ui.tools.webui_error_wrapper import webui_error_default_wrapper
 """
 
 import gradio as gr
@@ -48,11 +48,6 @@ def find_duplicates_images_error_wrapper(func: Callable) -> Callable:
             return None, f"发生了错误: {e}"
     return wrapper
 
-"""
-# 这个无法在WebUI中显示具体错误
-from utils.utils import webui_error_default_wrapper
-@webui_error_default_wrapper( (None, f"发生了错误，请查看控制台输出信息") )
-"""
 @find_duplicates_images_error_wrapper
 def find_duplicates_images(images_dir: str,
                            use_cache:bool,

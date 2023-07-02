@@ -54,6 +54,8 @@ CSV_FILE = FILES[-1]
 ONNX_NAME = "wd14.onnx"  # 转换的onnx模型的名字
 MULTI_OUTPUT_NUMBER = 4  # 调整后输出层的数量, 注意，如果你动了这个，需要重构下面代码，包括run_batch和change_keras_to_onnx函数
 
+wd14_vec_tag_file_name = "wd14_vec_tag.wd14.txt"  # 存放wd14特征向量每列对应的tag的文件名
+
 
 def preprocess_image(image):
     image = np.array(image)
@@ -242,7 +244,7 @@ def main(args,
 
     # tag保留一份用于聚类时候进行特征重要性分析
     _all_tag_list = [ row[1] for row in rows ]  # 读取所有的tag名字
-    np.savetxt( os.path.join(train_data_dir_path, "wd14_vec_tag.wd14.txt"),
+    np.savetxt( os.path.join(train_data_dir_path, wd14_vec_tag_file_name),
                 np.array(_all_tag_list),
                 delimiter=',',
                 fmt='%s'
