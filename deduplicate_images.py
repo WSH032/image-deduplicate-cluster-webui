@@ -24,15 +24,24 @@ from ui import deduplicate_ui
 """
 
 
-############################## Blocks ##############################
+##############################  常量  ##############################
 
 css = deduplicate_ui.css
+title = deduplicate_ui.blocks_name
 
-with gr.Blocks(title="Deduplicate", css=css) as demo:
-    deduplicate_ui.create_ui()
+
+############################## Blocks ##############################
+
+def create_ui() -> gr.Blocks:
+
+    with gr.Blocks(title=title, css=css) as demo:
+        deduplicate_ui.create_ui()
+    
+    return demo
 
 
 ############################## 命令行启动 ##############################
 
 if __name__ == "__main__":
+    demo = create_ui()
     demo.launch(debug=True, inbrowser=True)

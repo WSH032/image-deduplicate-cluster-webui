@@ -64,14 +64,19 @@ wd14_parameter_reference_markdown = """
 204张图片，热启动，tensor RT，4batch，不开多进程读取 = 2g显存占用，24s
 """
 
-############################## Blocks ##############################
 
+##############################  常量  ##############################
+
+# 填入的id请和huggingface.co上的一致，不要自己用别名！
+wd14_rep_id_list = ["SmilingWolf/wd-v1-4-moat-tagger-v2"]
 
 css = """
 .attention {color: red  !important}
 """
 blocks_name = "WD14 - tagger"
 
+
+############################## Blocks ##############################
 
 # 函数式创建有助于刷新ui界面
 def create_ui() -> gr.Blocks:
@@ -91,9 +96,9 @@ def create_ui() -> gr.Blocks:
             release_memory_button = gr.Button("释放内存或者显存中的模型")
         with gr.Row():
             repo_id = gr.Dropdown(
-                ["SmilingWolf/wd-v1-4-moat-tagger-v2"],
+                wd14_rep_id_list,
                 label="repo_id",
-                value="SmilingWolf/wd-v1-4-moat-tagger-v2",
+                value=wd14_rep_id_list[0],
                 type="value",
             )
             force_download = gr.Checkbox(label="强制重新下载模型", value=False, info="如果模型已经存在，是否强制下载覆盖")

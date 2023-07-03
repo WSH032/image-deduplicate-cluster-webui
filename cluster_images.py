@@ -4,6 +4,7 @@ Created on Fri May  5 17:38:31 2023
 
 @author: WSH
 """
+from typing import List
 
 import gradio as gr
 
@@ -63,36 +64,48 @@ tag_images_by_wd14_tagger来自[kohya](https://github.com/kohya-ss/sd-scripts/bl
 """
 
 
-############################## Blocks ##############################
+##############################  常量  ##############################
 
-
-css_list = [
-    """
-    .attention {color: red  !important}
-    """,
+sub_blocks_css_list = [
     wd14_ui.css,
     cluster_ui.css,
 ]
-css = "\n".join(css_list)
+def get_css_from_sub_blocks(sub_blocks_css_list: List[str]):
+    # 去重
+    deduplicat_sub_blocks_css_list = list( set(sub_blocks_css_list) )
+    # 按照原来的顺序排序
+    deduplicat_sub_blocks_css_list.sort(key=sub_blocks_css_list.index)
+    return "\n".join(deduplicat_sub_blocks_css_list)
 
 
-with gr.Blocks(title="Cluster-Tagger", css=css) as demo:
+css = get_css_from_sub_blocks(sub_blocks_css_list)
+title = "Cluster-Tagger"
+
+
+############################## Blocks ##############################
+
+def create_ui() -> gr.Blocks:
+
+    with gr.Blocks(title=title, css=css) as demo:
+            
+        with gr.Accordion(label="使用说明", open=False):
+            gr.Markdown(use_info_markdown)
+
+        # 图片聚类 #
+
+        with gr.Tab(cluster_ui.blocks_name):
+            cluster_ui.create_ui()
+
+        # WD14模型使用 #
         
-    with gr.Accordion(label="使用说明", open=False) as wd14_accordion:
-        gr.Markdown(use_info_markdown)
-
-    ############################## 图片聚类 ##############################
-
-    with gr.Tab(cluster_ui.blocks_name):
-        cluster_ui.create_ui()
-
-    ############################## WD14模型使用 ##############################
+        with gr.Tab(wd14_ui.blocks_name):
+            wd14_ui.create_ui()
     
-    with gr.Tab(wd14_ui.blocks_name):
-        wd14_ui.create_ui()
+    return demo
 
 
 ############################## 命令行启动 ##############################
 
 if __name__ == "__main__":
+    demo = create_ui()
     demo.launch(inbrowser=True,debug=True)

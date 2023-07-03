@@ -10,13 +10,40 @@ from ui.cluster_fn import(
     confirm_cluster,
     MAX_GALLERY_NUMBER,
 )
+from ui.tools.operate_images import cluster_dir_prefix
 
+
+##############################  常量  ##############################
+
+# 请与ui.clustere_fn.confirm_cluster对应
+process_clusters_method_choices = [
+    "重命名原图片(不推荐)",
+    f"在{cluster_dir_prefix}文件夹下生成聚类副本(推荐)",
+    f"移动原图至{cluster_dir_prefix}文件夹(大数据集推荐)",
+]
+
+# 请与ui.clustere_fn相应函数对应
+vectorizer_method_list = [
+    "TfidfVectorizer",
+    "CountVectorizer",
+    "WD14",
+]
+
+# 请与ui.clustere_fn相应函数对应
+cluster_model_list = [
+    "K-Means聚类",
+    "Spectral谱聚类",
+    "Agglomerative层次聚类",
+    "OPTICS聚类"
+]
 
 css = """
 .attention {color: red  !important}
 """
 blocks_name = "cluster"
 
+
+############################## Blocks ##############################
 
 def create_gr_gallery(max_gallery_number: int) -> List[Union[gr.Accordion, gr.Gallery]]:
     """
@@ -59,14 +86,22 @@ def create_ui() -> gr.Blocks:
                 images_dir = gr.Textbox(label="图片目录")     
             with gr.Row():
                 with gr.Column(scale=1):
-                    vectorizer_method_list = ["TfidfVectorizer", "CountVectorizer", "WD14"]
-                    vectorizer_method = gr.Dropdown(vectorizer_method_list, label="特征提取", value=vectorizer_method_list[0], type="index")
+                    vectorizer_method = gr.Dropdown(
+                        vectorizer_method_list,
+                        label="特征提取",
+                        value=vectorizer_method_list[0],
+                        type="index"
+                    )
                 use_comma_tokenizer = gr.Checkbox(label="强制逗号分词", value=True, info="启用后则以逗号划分各个tag。不启用则同时以空格和逗号划分")
                 use_binary_tokenizer = gr.Checkbox(label="tag频率二值化", value=True, info="只考虑是否tag出现而不考虑出现次数")
                 vectorizer_button = gr.Button("确认预处理", variant="primary")
             with gr.Row():
-                    cluster_model_list = ["K-Means聚类", "Spectral谱聚类", "Agglomerative层次聚类", "OPTICS聚类"]
-                    cluster_model = gr.Dropdown(cluster_model_list, label="聚类模型", value=cluster_model_list[0], type="index")
+                    cluster_model = gr.Dropdown(
+                        cluster_model_list,
+                        label="聚类模型",
+                        value=cluster_model_list[0],
+                        type="index"
+                    )
         with gr.Box():
             with gr.Row():
                 with gr.Accordion("聚类效果分析", open=True):
@@ -94,7 +129,6 @@ def create_ui() -> gr.Blocks:
         with gr.Row():
             with gr.Accordion("聚类图片展示", open=True):
                 with gr.Row(visible=False) as confirm_cluster_Row:
-                    process_clusters_method_choices = ["重命名原图片(不推荐)","在Cluster文件夹下生成聚类副本(推荐)","移动原图至Cluster文件夹(大数据集推荐)"]
                     process_clusters_method = gr.Radio(
                         label="图片处理方式",
                         value=process_clusters_method_choices[1],

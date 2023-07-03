@@ -10,6 +10,7 @@ from typing import Callable, Dict, List, Tuple
 from ui.tools.operate_images import (
     cache_images_file,
     operate_images_file,
+    cluster_dir_prefix,
 )
 
 
@@ -233,8 +234,10 @@ def cancel(delet_images_str: str) -> Tuple[str, dict, dict]:
 # TODO: 用包装器处理出错的情况
 # https://github.com/WSH032/image-deduplicate-cluster-webui/issues/1
 # gradio似乎无法正常识别函数注解，暂时注释掉
-def delet(duplicates_images_gallery,  # Tuple[str, str]
-          delet_images_str,  # str
+def confirm_cluster(
+    duplicates_images_gallery,  # Tuple[str, str]
+    selected_images_str,  # str
+    process_clusters_method, # int
 ):
     
     """
@@ -246,35 +249,65 @@ def delet(duplicates_images_gallery,  # Tuple[str, str]
     
     #如果还没查找过重复图片就什么都不做
     if (not confirmed_images_dir) or (not cluster_list):
-        print("还没查找过重复图片，无法删除")
-        return [], ""
+        no_duplicates_str = "还没查找过重复图片，无法操作"
+        print(no_duplicates_str)
+        return [], no_duplicates_str
     
     # 尝试将字符串载入成字典
     try:
-        delet_images_dict = toml.loads(delet_images_str)
+        selected_images_dict = toml.loads(selected_images_str)
     except Exception as e:
-        toml_error_str = f"{delet_images_str}\n待删除列表toml格式错误，请修正\nerror: {e}"
+        toml_error_str = f"{selected_images_str}\n待操作列表toml格式错误，请修正\nerror: {e}"
         return duplicates_images_gallery, toml_error_str
     
-    #获取待删除图片名字
-    need_delet_images_name_list = []
-    for parent_index, son_index_list in delet_images_dict.items():
+    #获取待操作图片名字
+    clustered_images_list = []
+    for parent_index, son_index_list in selected_images_dict.items():
         # 某一个重复类的图片名字列表
         sub_cluster_list = cluster_list[ int(parent_index) ]
-        # 该重复类中需要删除的图片名字
-        need_delet_images_name_list.append( [ sub_cluster_list[i] for i in son_index_list ] )
-    
+        # 该重复类中需要操作的图片名字
+        clustered_images_list.append( [ sub_cluster_list[i] for i in son_index_list ] )
+
+    # 输出信息
+    def display_info(clustered_images_list: List[List[str]]):
+        if clustered_images_list:
+            for index, sub_cluster_list in enumerate(clustered_images_list):
+                print(f"第{index}类 待操作图片列表: {sub_cluster_list}")
+        else:
+            logging.warning("待操作图片列表为空，你似乎没有选择任何图片")
+    display_info(clustered_images_list)
+
+
+    # 带时间戳的重命名原图片和附带文件
+    if process_clusters_method == 0:
+        operation = "rename"
+        operate_result_str = f"{confirmed_images_dir}\n内被选中的图片均加上了{cluster_dir_prefix}前缀"
+    # 移动原图至Cluster文件夹
+    elif process_clusters_method == 1:
+        operation = "move"
+        operate_result_str = f"{confirmed_images_dir}\n内被选中的的图片均被移动至该目录的{cluster_dir_prefix}子文件夹"
+    # 删除原图
+    elif process_clusters_method == 2:
+        operation = "remove"
+        operate_result_str = f"{confirmed_images_dir}\n内被选中的的图片均被删除"
+    else:
+        assert False, "process_clusters_method参数错误"
+
+    operate_result_str = f"成功{operation}了被选中的{len(clustered_images_list)}个重复类\n" + operate_result_str
+
+
     operate_images_file(
         images_dir=confirmed_images_dir,
-        clustered_images_list=need_delet_images_name_list,
+        clustered_images_list=clustered_images_list,
         extra_file_ext_list=extra_file_ext_list,
-        operation="remove",
+        operation=operation,
     )
-    
+
+
     #重置状态，阻止使用自动选择，除非再扫描一次
     cluster_list = []
     confirmed_images_dir = ""
-    return [], ""
+    return [], operate_result_str
 
 
 ##############################  自动选择  ##############################
