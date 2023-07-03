@@ -10,13 +10,14 @@ import onnxruntime as ort
 import tag_images_by_wd14_tagger as tagger
 from ui.tools import path_tools
 
-############################## wd14模型常量 ##############################
+############################## 参数常量 ##############################
 
 wd14_model_dir_name = "wd14_tagger_model"  # webui中默认锁定的下载模型的目录
 wd14_model_dir = os.path.join(path_tools.CWD, wd14_model_dir_name)
 if not os.path.exists(wd14_model_dir):
     os.mkdir(wd14_model_dir)
 
+############################## 全局变量 ##############################
 
 # 用于保存模型，避免每次都要加载模型，浪费时间
 model_in_memory: Union[None, ort.InferenceSession] = None

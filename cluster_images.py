@@ -92,6 +92,7 @@ with gr.Blocks(title="Cluster-Tagger", css=css) as demo:
         wd14_ui.create_ui()
 
 
+############################## 命令行启动 ##############################
 
 if __name__ == "__main__":
     demo.launch(inbrowser=True,debug=True)
