@@ -72,6 +72,7 @@ wd14_rep_id_list = ["SmilingWolf/wd-v1-4-moat-tagger-v2"]
 
 css = """
 .attention {color: red  !important}
+.recommendation {color: dodgerblue !important}
 """
 blocks_name = "WD14 - tagger"
 
@@ -89,11 +90,11 @@ def create_ui() -> gr.Blocks:
             with gr.Accordion("性能参数参考", open=False):
                 gr.Markdown(wd14_parameter_reference_markdown)
         with gr.Row():
-            wd14_finish_Markdown = gr.Markdown(value="如果要使用WD14打标,在图片目录框填入路径后点击")
+            wd14_finish_Markdown = gr.Markdown(value="请在Tagger目录框内填入需要标记的图片文件夹路径")
         with gr.Row():
             train_data_dir = gr.Textbox(label="Tagger目录", value="")
-            use_wd14_button = gr.Button("WD14模型打标", elem_classes="attention")
-            release_memory_button = gr.Button("释放内存或者显存中的模型")
+            use_wd14_button = gr.Button("WD14模型打标", variant="primary")
+            release_memory_button = gr.Button("释放内存或者显存中的模型", elem_classes="recommendation")
         with gr.Row():
             repo_id = gr.Dropdown(
                 wd14_rep_id_list,

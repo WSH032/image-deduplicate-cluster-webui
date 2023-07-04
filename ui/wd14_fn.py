@@ -8,12 +8,13 @@ import gradio as gr
 import onnxruntime as ort
 
 import tag_images_by_wd14_tagger as tagger
-from ui.tools import path_tools
+# from ui.tools import path_tools
 
 ############################## 参数常量 ##############################
 
 wd14_model_dir_name = "wd14_tagger_model"  # webui中默认锁定的下载模型的目录
-wd14_model_dir = os.path.join(path_tools.CWD, wd14_model_dir_name)
+# wd14_model_dir = os.path.join(path_tools.CWD, wd14_model_dir_name)  # 使用当前工作目录以保存向前兼容性
+wd14_model_dir = os.path.join(os.getcwd(), wd14_model_dir_name)
 if not os.path.exists(wd14_model_dir):
     os.mkdir(wd14_model_dir)
 

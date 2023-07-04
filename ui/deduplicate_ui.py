@@ -41,6 +41,7 @@ process_clusters_method_choices = [
 
 css = """
 .attention {color: red  !important}
+.recommendation {color: dodgerblue !important}
 """
 blocks_name = "Deduplicate"
 
@@ -56,7 +57,7 @@ def create_ui() -> gr.Blocks:
                 images_dir = gr.Textbox(label="图片目录")
             with gr.Column(scale=1):
                 use_cache = gr.Checkbox(label="使用缓存")
-                find_duplicates_images_button = gr.Button("扫描重复图片")
+                find_duplicates_images_button = gr.Button("扫描重复图片", variant="primary")
         with gr.Row():
             with gr.Column(scale=15):
                 with gr.Row():
@@ -78,7 +79,7 @@ def create_ui() -> gr.Blocks:
                         type="index",
                     )
                     confirm_cluster_button = gr.Button("确定处理", elem_classes="attention")
-                    auto_select_button = gr.Button("自动选择")
+                    auto_select_button = gr.Button("自动选择", elem_classes="recommendation")
                     all_select_button = gr.Button("全部选择")
                 selected_images_str = gr.Textbox(label="待操作列表（手动编辑时请保证toml格式的正确）")
 

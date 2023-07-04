@@ -39,6 +39,7 @@ cluster_model_list = [
 
 css = """
 .attention {color: red  !important}
+.recommendation {color: dodgerblue !important}
 """
 blocks_name = "cluster"
 
@@ -105,7 +106,7 @@ def create_ui() -> gr.Blocks:
         with gr.Box():
             with gr.Row():
                 with gr.Accordion("聚类效果分析", open=True):
-                    gr.Markdown("建议多次运行分析，取最大值作为最终聚类数")
+                    gr.Markdown("**建议多次运行分析，取最大值作为最终聚类数**")
                     with gr.Row():
                         max_cluster_number = gr.Slider(2, MAX_GALLERY_NUMBER, step=1, value=10, label="分析时最大聚类数 / OPTICS-min_samples")
                         cluster_analyse_button = gr.Button(value="请先预处理再分析", interactive=False)
