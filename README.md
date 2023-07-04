@@ -11,11 +11,15 @@
 ![deduplicate_demo](https://github.com/WSH032/image-deduplicate-cluster-webui/assets/126865849/093198c5-89b3-4f88-8ccc-4412e662cf35)
 
 ### 聚类演示
-![title_show](https://github.com/WSH032/image-deduplicate-cluster-webui/assets/126865849/4dab7fcf-3048-4cce-8441-347d8a3c2a68)
-
 ![images_cluster_show_0](https://github.com/WSH032/image-deduplicate-cluster-webui/assets/126865849/213b1370-80b5-4c41-8e49-0c8003acbd62)
 
+### WD14-Tagger 演示
+![wd14_show_1](https://github.com/WSH032/image-deduplicate-cluster-webui/assets/126865849/29b52bf7-316d-4bb6-850d-e40e1caa3afc)
+
+### 其他
 **另一张复杂情况的8聚类效果请看[这里`images_cluster_show_1`](https://github.com/WSH032/image-deduplicate-cluster-webui/assets/126865849/1b7ecffb-14a8-492c-a629-e4d93850e54c)**
+
+[聚类-Tagger说明 `title_show`](https://github.com/WSH032/image-deduplicate-cluster-webui/assets/126865849/4dab7fcf-3048-4cce-8441-347d8a3c2a68)
 
 ## Credit
  - 我不训练模型，WD14模型来自于这个项目[SmilingWolf/WD14](https://huggingface.co/SmilingWolf)
@@ -35,6 +39,9 @@
   - 现在查重结果的操作将采用和聚类一样的操作方式
 #### Other Changes:
 - 优化ui显示
+- A1111-WebUI中现在`聚类`和`查重`被分为两个选项卡
+  - `聚类` 对应 `Cluster-Tagger`
+  - `查重` 对应 `Deduplicate`
 - 删除 `./docs` 中所有展示图片，更换为 `github/assets` 链接以减小仓库体积
   - 使用 `git clone --depth=1` 时，将不再下载多余图片，以方便快速克隆
 #### Bug Fixes:
@@ -153,9 +160,9 @@
 
 ![run_tagger](https://github.com/WSH032/image-deduplicate-cluster-webui/assets/126865849/9681a7d1-b66e-4ac2-a47e-dc443145cd90)
 
-**2023/06/6，新增WD14的WebUI界面，挂载在图片聚类WebUI[wd14_show_0](https://github.com/WSH032/image-deduplicate-cluster-webui/assets/126865849/2cb05723-cad4-4d0b-812a-2172b74fc211)中**
+**2023/06/6，新增WD14的WebUI界面，挂载在图片聚类WebUI中**
 
-![wd14_show_1](https://github.com/WSH032/image-deduplicate-cluster-webui/assets/126865849/29b52bf7-316d-4bb6-850d-e40e1caa3afc)
+展示图[`wd14_show_0`](https://github.com/WSH032/image-deduplicate-cluster-webui/assets/126865849/2cb05723-cad4-4d0b-812a-2172b74fc211)
 
 
 ## Todo
