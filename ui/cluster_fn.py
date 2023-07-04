@@ -81,22 +81,22 @@ def vectorizer(images_dir: str,
                use_comma_tokenizer: bool,
                use_binary_tokenizer: bool,
                cluster_model: int
-) -> Tuple[
-        Tuple[
-            # 如果是tag聚类，则两个矩阵相同
-            # 如果是wd14聚类，则第一个矩阵为入口层，第二个矩阵为出口层
-            # 第一个矩阵将用于聚类； 第二矩阵的和用于特征重要性分析的tag长度对应，将用于特征重要性分析
-            Tuple[np.ndarray, np.ndarray],
-            # 向量每列对应的tag
-            List[str],
-            # 每行对应的图片名
-            List[str]
+) ->    Tuple[
+            Tuple[
+                # 如果是tag聚类，则两个矩阵相同
+                # 如果是wd14聚类，则第一个矩阵为入口层，第二个矩阵为出口层
+                # 第一个矩阵将用于聚类； 第二矩阵的和用于特征重要性分析的tag长度对应，将用于特征重要性分析
+                Tuple[np.ndarray, np.ndarray],
+                # 向量每列对应的tag
+                List[str],
+                # 每行对应的图片名
+                List[str]
         ],
         Union[skc.KMeans, skc.SpectralClustering, skc.AgglomerativeClustering, skc.OPTICS],  # 聚类模型
         str,  # 处理完毕提示
         dict,  # 聚类分析按钮
         dict,  # 确定聚类按钮
-    ]:
+        ]:
 
     """
     读取images_dir下的图片或tags文本，用其生成特征向量
@@ -255,9 +255,10 @@ def cluster_images_exception_wrapper(func) -> Callable:
             return func(*args, **kwargs)
         except Exception as e:
             logging.exception(f"{func.__name__}函数出现了异常: {e}")
-            # 前一半是gallery的，后一半是accordion的
+            # 前一半是accordion的，后一半是gallery的
             gr_Accordion_list = [gr.update(visible=False) for i in range(MAX_GALLERY_NUMBER)]
-            gr_Gallery_list = [gr.update(value=None) for i in range(MAX_GALLERY_NUMBER)]
+            # 对于画廊，尽量不要把visible设为False
+            gr_Gallery_list = [gr.update(value=None) for i in range(MAX_GALLERY_NUMBER)]  
 
             return gr_Accordion_list + gr_Gallery_list + [gr.update(visible=False)] + [gr.update(value={})]
     return wrapper
@@ -479,7 +480,11 @@ def cluster_analyse_exception_wrapper(func) -> Callable:
     return wrapper
 
 @cluster_analyse_exception_wrapper
-def cluster_analyse(max_cluster_number: int, vectorize_X_and_label_State:list, cluster_model_State):
+def cluster_analyse(
+    max_cluster_number: int,
+    vectorize_X_and_label_State:list,
+    cluster_model_State
+) -> Tuple[dict, dict, dict]:
     """
     将评估从聚类数从 2~max_cluster_number 的效果
     返回matplotlib类型的肘部曲线和轮廓系数
@@ -593,7 +598,26 @@ def cluster_analyse(max_cluster_number: int, vectorize_X_and_label_State:list, c
 
 ##############################  确定聚类  ##############################
 
-def confirm_cluster(process_clusters_method:int, global_dict_State: dict) -> Tuple[dict, dict, dict]:
+def confirm_cluster_exception_wrapper(func) -> Callable:
+    """
+    用于处理confirm_cluster函数的异常
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logging.exception(f"{func.__name__}函数出现了异常: {e}")
+            return (
+                gr.update(visible=False),  # 确定聚类结果操作的那一行全部隐藏
+                gr.update(value="出错，解决后请重新预处理", interactive=False),  # 分析按钮
+                gr.update(value="出错，解决后请重新预处理", interactive=False)  # 确定聚类按钮
+            )
+    return wrapper
+
+def confirm_cluster(
+        process_clusters_method:int,
+        global_dict_State: dict
+) -> Tuple[dict, dict, dict]:
     """
     根据选择的图片处理方式，对global_dict_State中聚类后的图片列表，以及路径进行相关操作
     

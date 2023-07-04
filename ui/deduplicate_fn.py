@@ -117,9 +117,10 @@ def find_duplicates_images_error_wrapper(func: Callable) -> Callable:
     return wrapper
 
 @find_duplicates_images_error_wrapper
-def find_duplicates_images(images_dir: str,
-                           use_cache: bool,
-    ):
+def find_duplicates_images(
+    images_dir: str,
+    use_cache: bool,
+):
     """
     outputs=[duplicates_images_gallery, delet_images_str]
     """
@@ -165,7 +166,23 @@ def find_duplicates_images(images_dir: str,
 
 ##############################  确定选择某个图片  ##############################
 
-# TODO: 用包装器处理出错的情况
+def confirm_exception_wrapper(func) -> Callable:
+    """
+    用于处理confirm函数的异常
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logging.exception(f"{func.__name__}函数出现了异常: {e}")
+            return (
+                f"警告，发生了未知错误: {e}\n详细请查看控制台，解决后请重新运行查重",
+                gr.update( variant="secondary" ),  # 确认按钮变灰
+                gr.update( variant="secondary" ),  # 取消按钮变灰
+            )
+    return wrapper
+
+@confirm_exception_wrapper
 def confirm(delet_images_str: str) -> Tuple[str, dict, dict]:
     
     # 尝试将字符串载入成字典
@@ -173,7 +190,7 @@ def confirm(delet_images_str: str) -> Tuple[str, dict, dict]:
         delet_images_dict = toml.loads(delet_images_str)
     except Exception as e:
         toml_error_str = f"{delet_images_str}\n待删除列表toml格式错误，请修正\nerror: {e}"
-        # 确认和取消按钮都变红
+        # 确认和取消按钮都变灰
         return toml_error_str, gr.update( variant="secondary" ), gr.update( variant="secondary" )
     
     # 把删除标志如 "0:1" 分成 "0" 和 "1"
@@ -200,7 +217,23 @@ def confirm(delet_images_str: str) -> Tuple[str, dict, dict]:
 
 ##############################  取消选择某个图片  ##############################
 
-# TODO: 用包装器处理出错的情况
+def cancel_exception_wrapper(func) -> Callable:
+    """
+    用于处理cancel函数的异常
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logging.exception(f"{func.__name__}函数出现了异常: {e}")
+            return (
+                f"警告，发生了未知错误: {e}\n详细请查看控制台，解决后请重新运行查重",
+                gr.update( variant="secondary" ),  # 确认按钮变灰
+                gr.update( variant="secondary" ),  # 取消按钮变灰
+            )
+    return wrapper
+
+@cancel_exception_wrapper
 def cancel(delet_images_str: str) -> Tuple[str, dict, dict]:
     
     # 尝试将字符串载入成字典
@@ -231,18 +264,33 @@ def cancel(delet_images_str: str) -> Tuple[str, dict, dict]:
 
 ##############################  确认删除图片  ##############################
 
-# TODO: 用包装器处理出错的情况
+def confirm_cluster_exception_wrapper(func) -> Callable:
+    """
+    用于处理confirm_cluster函数的异常
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logging.exception(f"{func.__name__}函数出现了异常: {e}")
+            return (
+                [],  # 清空画廊
+                f"警告，发生了未知错误: {e}\n详细请查看控制台，解决后请重新运行查重",
+            )
+    return wrapper
+
 # https://github.com/WSH032/image-deduplicate-cluster-webui/issues/1
 # gradio似乎无法正常识别函数注解，暂时注释掉
+@confirm_cluster_exception_wrapper
 def confirm_cluster(
     duplicates_images_gallery,  # Tuple[str, str]
     selected_images_str,  # str
     process_clusters_method, # int
-):
+) -> Tuple[list, str]:
     
     """
-    output=[duplicates_images_gallery, delet_images_str]
-    第一个输出为画廊组件，第二个输出将delet_images_str文本清空
+    outputs=[duplicates_images_gallery, selected_images_str],
+    第一个输出为画廊组件，第二个输出将selected_images_str文本清空
     """
     
     global confirmed_images_dir, cluster_list
@@ -337,6 +385,19 @@ def get_files_to_remove(duplicates: Dict[str, List]) -> List:
     return list(files_to_remove)
 
 
+def auto_select_exception_wrapper(func) -> Callable:
+    """
+    用于处理auto_selectr函数的异常
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logging.exception(f"{func.__name__}函数出现了异常: {e}")
+            return f"警告，发生了未知错误: {e}\n详细请查看控制台，解决后请重新运行查重"
+    return wrapper
+
+@auto_select_exception_wrapper
 def auto_select() -> str:
     """
     由自带的启发式算法找出应该删去的图片
@@ -378,6 +439,19 @@ def auto_select() -> str:
 
 ##############################  全部选择  ##############################
 
+def all_select_exception_wrapper(func) -> Callable:
+    """
+    用于处理all_select函数的异常
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logging.exception(f"{func.__name__}函数出现了异常: {e}")
+            return f"警告，发生了未知错误: {e}\n详细请查看控制台，解决后请重新运行查重"
+    return wrapper
+
+@all_select_exception_wrapper
 def all_select() -> str:
     """ 根据cluster_list的重复图片分类及数量选择全部图片 """
     
@@ -398,7 +472,33 @@ def all_select() -> str:
 
 ##############################  根据当前浏览的图片，更改按钮颜色和显示图片信息  ##############################
 
-def get_choose_image_index(evt: gr.SelectData, delet_images_str: str):
+def get_choose_image_index_exception_wrapper(func) -> Callable:
+    """
+    用于处理get_choose_image_index函数的异常
+    """
+    # 注意，这里的第一个参数evt: gr.SelectData不要动
+    def wrapper(
+            evt: gr.SelectData,
+            *args,
+            **kwargs,
+        ):
+        try:
+            return func(evt, *args, **kwargs)
+        except Exception as e:
+            logging.exception(f"{func.__name__}函数出现了异常: {e}")
+            return (
+                gr.update( value="出错", variant="secondary" ),
+                gr.update( value="出错", variant="secondary" ),
+                {"Warning":f"警告，发生了未知错误: {e}\n详细请查看控制台，解决后请重新运行查重"},
+            )
+    return wrapper
+
+@get_choose_image_index_exception_wrapper
+def get_choose_image_index(
+    evt: gr.SelectData,
+    delet_images_str: str
+) -> Tuple[dict, dict, dict]:
+
     # evt.value 为标签 ；evt.index 为图片序号； evt.target 为调用组件名
     global choose_image_index, images_info_dict
     
@@ -428,7 +528,7 @@ def get_choose_image_index(evt: gr.SelectData, delet_images_str: str):
         if flag==1:
             return 'primary'
         else:
-            return "secondary" 
+            return "secondary"
 
     gr_confirm_button = gr.update( value=f"选择 {evt.value}", variant=variant(flag[0]) )
     gr_cancel_button = gr.update( value=f"取消 {evt.value}", variant=variant(flag[1]) )
