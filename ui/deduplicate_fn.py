@@ -27,6 +27,7 @@ cache_folder_name = "cache"  # 缓存文件夹名
 
 ############################## 全局变量 ##############################
 
+# TODO: 换成gr.State，这样可以在界面刷新后失效，和避免多用户间干扰
 choose_image_index: str = "0:0"  # 用于记录当前点击了画廊哪个图片
 cluster_list: list[ list[str] ] = []  # 用于记录重复图片的聚类结果
 confirmed_images_dir: str = ""  # 用于记录查重结果对应的文件夹路径，防止使用者更改导致错误
@@ -100,7 +101,7 @@ def get_images_info(images_tuple_list: List[Tuple[str, str]]) -> Dict[str, dict]
                 }
                 images_info_dict[image_label] = image_info_dict
         except Exception as e:
-            logging.exception(f"{image_path}\n获取图片信息时发生了错误: {e}")
+            logging.error(f"{image_path}\n获取图片信息时发生了错误: {e}")
             images_info_dict[image_label] = {}
 
     return images_info_dict

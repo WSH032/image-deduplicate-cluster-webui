@@ -26,6 +26,7 @@ def change_name_with_old_ext(path: str, new_name: str) -> str:
 
 
 # TODO: 最好加上修改时间
+# TODO: 有可能因为缓存失败照成图片无法显示，考虑返回缓存后的图片地址
 def cache_images_file(cache_images_list: List[str], cache_dir: str, resolution: int=512 ):
     """
     调用pillow，将重复的图片缓存到同路径下的一个cache文件夹中，分辨率最大为resolution,与前面图片名字一一对应
@@ -54,6 +55,7 @@ def cache_images_file(cache_images_list: List[str], cache_dir: str, resolution: 
     print(f"缓存完成: {cache_dir}\nDone!")
 
 
+# TODO: 返回操作后图片的新绝对路径
 def operate_images_file(
         images_dir: str,
         clustered_images_list: List[List[str]],
@@ -115,7 +117,8 @@ def operate_images_file(
                 need_copy_file_old_path = os.path.join(images_dir, need_copy_file_name)
                 need_copy_file_new_path = os.path.join(cluster_son_dir, need_copy_file_name)
                 if not os.path.exists(need_copy_file_old_path):
-                    logging.warning(f"文件{need_copy_file_old_path}不存在，跳过")
+                    # 在类似查重，或者依靠tag文本聚类时候，用户不一定需要附带文件，所以不存在是正常的，这里只报个info记录下表示正常运行
+                    logging.info(f"文件{need_copy_file_old_path}不存在，跳过")
                     continue
                 try:
                     shutil.copy2(need_copy_file_old_path, need_copy_file_new_path)
@@ -145,7 +148,7 @@ def operate_images_file(
                 输入的old_name可以是图片名，也可以是同名的附带文件名；但注意是名字而不是路径
 
                 Returns:
-                    Union[str,None]: 新的路径，如果是删除操作则返回None
+                    str: 新的路径，如果是删除操作则返回""
                 """
                 if operation in ["rename"]:
                 # 重命名图片路径并保留扩展名
@@ -164,7 +167,7 @@ def operate_images_file(
 
             # 如果连图片都不在，剩下都别操作了
             if not os.path.exists(image_path):
-                logging.error(f"图片 {image_path} 不存在")
+                logging.warning(f"图片 {image_path} 不存在，将不会对其进行任何操作")
                 p_bar.update(1)
                 continue
 
@@ -174,6 +177,8 @@ def operate_images_file(
                 operate_func(image_path, new_image_path)
             except Exception as e:
                 logging.error(f"操作 {image_name} 失败, error: {e}")
+                # 图片操作失败，剩下的就别操作了
+                continue
             
             # 操作附带文件
             for extra_file_name in extra_file_name_list:
@@ -184,6 +189,9 @@ def operate_images_file(
                         operate_func(extra_file_path, new_extra_file_path)
                     except Exception as e:
                         logging.error(f"操作 {extra_file_name} 失败, error: {e}")
+                else:
+                    # 在类似查重，或者依靠tag文本聚类时候，用户不一定需要附带文件，所以不存在是正常的，这里只报个info记录下表示正常运行
+                    logging.info(f"文件 {extra_file_name} 不存在，跳过")
 
             p_bar.update(1)
     

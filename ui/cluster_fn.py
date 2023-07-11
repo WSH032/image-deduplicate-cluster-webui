@@ -1,5 +1,5 @@
 import os
-from typing import List, Tuple, Callable, Union
+from typing import List, Tuple, Callable, Union, Literal
 import logging
 import math
 
@@ -28,8 +28,16 @@ from tqdm import tqdm
 from ui.tools.operate_images import (
     cache_images_file,
     operate_images_file,
+    cluster_dir_prefix,
 )
 from ui.tools.SearchImagesTags import SearchImagesTags
+from tag_images_by_wd14_tagger import (
+    DEFAULT_TAGGER_CAPTION_EXTENSION,  # 默认打标文件的扩展名
+    WD14_NPZ_EXTENSION,  # 用于保存推理所得特征向量的文件扩展名 # .wd14用来区分kohya的潜变量cache
+    WD14_TAGS_TOML_FILE,  # 存储各列向量对应的tag的文件的名字
+    read_wd14_tags_toml,  # 读取存储各列向量对应的tag的文件的内容以获取tags列表
+    WD14_NPZ_ARRAY_PREFIX,
+)
 
 
 ##############################  常量  ##############################
@@ -37,14 +45,52 @@ from ui.tools.SearchImagesTags import SearchImagesTags
 MAX_GALLERY_NUMBER = 100  # 画廊里展示的最大聚类数量为100
 CACHE_RESOLUTION = 192  # 缓存图片时最大分辨率
 
-tag_file_ext = ".txt"  # 存放特征tag的文件后缀名
-wd4_file_ext = ".wd14.npz"  # 存放特征向量的文件后缀名
-extra_file_ext_list = [tag_file_ext, wd4_file_ext]  # 在确认聚类中随图片一起被操作的文件后缀名列表
+CACHE_FOLDER_NAME = "cache"  # 缓存文件夹名
 
-# TODO: 从tag_images_by_wd14_tagger中获取
-wd14_vec_tag_file_name = "wd14_vec_tag.wd14.txt"  # 存放wd14特征向量每列对应的tag的文件名，由wd14脚本生成
+FEATURE_EXTRACTION_METHOD_LIST = [
+    "Text tags文本特征向量",
+    "Image wd14图片特征向量",
+]
 
-cache_folder_name = "cache"  # 缓存文件夹名
+WD14_FEATURE_LAYER_CHOICE_LIST = [
+    "predictions_sigmoid 全向量层",
+    "predictions_norm 压缩层",
+]
+
+TEXT_VECTORIZATION_METHOD_LIST = [
+    "TfidfVectorizer",
+    "CountVectorizer",
+]
+
+PROCESS_CLUSTERS_METHOD_CHOICES = [
+    "重命名原图片(不推荐)",
+    f"在{cluster_dir_prefix}文件夹下生成聚类副本(推荐)",
+    f"移动原图至{cluster_dir_prefix}文件夹(大数据集推荐)",
+]
+
+CLUSTER_MODEL_LIST = [
+    "K-Means聚类",
+    "Spectral谱聚类",
+    "Agglomerative层次聚类",
+    "OPTICS聚类"
+]
+
+KMEANS_N_INIT = 8  # KMeans聚类时的n_init参数
+
+
+##############################  全局变量  ##############################
+
+# TODO: 换成gr.State，这样可以在界面刷新后失效，和避免多用户间干扰
+tag_file_ext = DEFAULT_TAGGER_CAPTION_EXTENSION  # 存放特征tag的文件后缀名
+wd4_file_ext = WD14_NPZ_EXTENSION  # 存放特征向量的文件后缀名
+
+
+##############################  聚类特征选择Box切换  ##############################
+def feature_extraction_method_change_trigger(feature_extraction_method_index: int):
+    gr_Box_update_list = [ gr.update(visible=False) for i in FEATURE_EXTRACTION_METHOD_LIST ]
+    gr_Box_update_list[feature_extraction_method_index] = gr.update(visible=True)
+    return gr_Box_update_list
+
 
 ##############################  特征获取  ##############################
 # 逗号分词器
@@ -55,6 +101,154 @@ def comma_tokenizer(text: str) -> List[str]:
     返回["xixi", "haha"]
     """
     return [tag.strip() for tag in text.split(',')]
+
+# tag聚类
+def text_vectorizer_func(
+    images_dir: str,
+    text_vectorizer_method: Literal[0, 1],
+    use_comma_tokenizer: bool,
+    use_binary_tokenizer: bool,
+) -> Tuple[Tuple[np.ndarray, np.ndarray], List[str], List[str]]:
+
+    # 搜索存放tag的txt文本
+    searcher = SearchImagesTags(images_dir, tag_file_ext=tag_file_ext)
+
+    # 文本提取器参数
+    vectorizer_args_dict = {
+        "binary": use_binary_tokenizer,
+        "max_df": 0.99,
+    }
+    if use_comma_tokenizer:
+        vectorizer_args_dict["tokenizer"] = comma_tokenizer
+
+
+    # 输出信息的同时可以判断输入值是否非法
+    text_vectorizer_method_str = TEXT_VECTORIZATION_METHOD_LIST[text_vectorizer_method]
+    print(f"选择了{text_vectorizer_method_str}")
+
+    # 选择特征提取器
+    if text_vectorizer_method == 0 :
+        assert text_vectorizer_method_str == "TfidfVectorizer"
+        tfvec = skt.TfidfVectorizer(**vectorizer_args_dict)
+    elif text_vectorizer_method == 1 :
+        assert text_vectorizer_method_str == "CountVectorizer"
+        tfvec = skt.CountVectorizer(**vectorizer_args_dict)
+    else:
+        raise ValueError(
+            (
+                f"text_vectorizer_method = {text_vectorizer_method}非法, "
+                f"目前只支持{[i for i in range(len(TEXT_VECTORIZATION_METHOD_LIST))]}"
+            )
+        )
+    
+    # tag内容, 用于文本提取
+    tag_content_list = searcher.tag_content(error_then_tag_is="_no_tag")
+    
+    # tags转为向量特征
+    X = tfvec.fit_transform(tag_content_list).toarray()  # type: ignore # 向量特征
+    X = (X, X)  # 为了与WD14的输出保持一致，这里将X变为二元组
+
+    tf_tags_list = tfvec.get_feature_names_out().tolist()  # 向量每列对应的tag
+    # stop_tags = tfvec.stop_words_  # 被过滤的tag
+
+    # 特征矩阵每行对应的文件名
+    image_files_list = searcher.image_files_list
+    assert image_files_list is not None, "image_files_list is None"  # 正常来说不会为None，这里为了让pylance开心
+
+    return (X, tf_tags_list, image_files_list)
+
+
+# wd14特征向量聚类
+def get_wd14_feature_func(
+    images_dir: str,
+    wd14_feature_layer_choice: Literal[0, 1]
+) -> Tuple[Tuple[np.ndarray, np.ndarray], List[str], List[str]]:
+
+    # 读取储存在.wd14.npz文件中的向量特征
+    searcher = SearchImagesTags(images_dir, tag_file_ext=wd4_file_ext)
+    npz_files_list = searcher.tag_files()  # 储存特征向量的文件名列表
+
+    # 输出信息的同时可以判断输入值是否非法
+    wd14_feature_layer_choose_str = WD14_FEATURE_LAYER_CHOICE_LIST[wd14_feature_layer_choice]
+    print(f"选择了{wd14_feature_layer_choose_str}")
+
+    if wd14_feature_layer_choice == 0:
+        assert wd14_feature_layer_choose_str == "predictions_sigmoid 全向量层"
+        layer_index = 0
+    elif wd14_feature_layer_choice == 1:
+        assert wd14_feature_layer_choose_str == "predictions_norm 压缩层"
+        layer_index = 2
+    else:
+        raise ValueError(
+            (
+                f"wd14_feature_layer_choice = {wd14_feature_layer_choice}非法, "
+                f"目前只支持{[i for i in range(len(WD14_FEATURE_LAYER_CHOICE_LIST))]}"
+            )
+        )
+
+    # 用来暂存向量
+    X_inside = []  # 内层，取决于layer_index
+    X_outside = []  # 出口层，固定取最外层
+    error_indies = []  # 读取错误的文件索引
+    for index, npz_file in enumerate(npz_files_list):
+        try:
+            with np.load( os.path.join(images_dir, npz_file) ) as npz:
+                X_inside.append(npz[f"{WD14_NPZ_ARRAY_PREFIX}{layer_index}"])
+                X_outside.append(npz[f"{WD14_NPZ_ARRAY_PREFIX}0"])  # 0强制指定为最外层
+        except Exception as e:
+            logging.error(f"读取 {npz_file} 向量特征时出错，其将会被置一：\n{e}")
+            # 读错了就跳过
+            X_inside.append(None)
+            X_outside.append(None)
+            error_indies.append(index)  # 记录出错位置
+            continue
+    
+    if len(error_indies) == len(npz_files_list):
+        raise ValueError("所有向量特征读取错误，无法继续")
+    
+    def check_error(need_check_list: List[np.ndarray], error_indies: List[int]):
+        """ 将错误读取的矩阵元素全部置一，会直接修改传入的need_check_list """
+
+        # 没有错误就不检查了
+        if not error_indies:
+            return
+        for temp in need_check_list:
+            # 找到一个不为空的正确元素，记录其中矩阵的维度，生成一个同样大小的一矩阵
+            # 赋值给需要检查列表中错误的元素
+            if temp is not None:
+                # repalce_arr = np.zeros_like(temp)
+                repalce_arr = np.ones_like(temp)
+                for index in error_indies:
+                    need_check_list[index] = repalce_arr
+                break
+    # 注意，请先检查数据，因为如果读取出错了列表里面会有None元素，无法转为矩阵
+    check_error(X_inside, error_indies)
+    check_error(X_outside, error_indies)
+    
+    # list[np.ndarray]  # np.ndarray.shape = (n_samples, n_features)
+    X = ( np.array(X_inside), np.array(X_outside) )
+
+    X_outside_col_len = X[1].shape[1]  # 外层特征向量列长度
+    try:
+        # 读取对应的tag文件
+        wd14_tags_toml_path = os.path.join(images_dir, WD14_TAGS_TOML_FILE)
+
+        rating_tags, general_tags, characters_tags = read_wd14_tags_toml( wd14_tags_toml_path )
+        tf_tags_list = rating_tags + general_tags + characters_tags  # 向量每列对应的tag
+
+        tf_tags_list_len = len(tf_tags_list)  # 所读取到的总tag数量
+        if tf_tags_list_len != X_outside_col_len:
+            raise ValueError(f"读取的wd14_tags文件{wd14_tags_toml_path}中所指定的tags数量{tf_tags_list_len}与实际特征数量{X_outside_col_len}不一致")
+    except Exception as e:
+        logging.error(f"读取 {WD14_TAGS_TOML_FILE} 文件时出错，无法进行特征重要性分析，后续不会显示聚类标签：\n{e}")
+        # 出错了就生成与outside层特征维度数(列数)一样数量的标签"error"
+        tf_tags_list = [ "error" for i in range(X_outside_col_len) ]
+
+    # 特征矩阵每行对应的文件名
+    image_files_list = searcher.image_files_list
+    assert image_files_list is not None, "image_files_list is None"  # 正常来说不会为None，make pylance happy
+
+    return (X, tf_tags_list, image_files_list)
 
 
 def vectorizer_exception_wrapper(func) -> Callable:
@@ -76,11 +270,19 @@ def vectorizer_exception_wrapper(func) -> Callable:
     return wrapper
 
 @vectorizer_exception_wrapper
-def vectorizer(images_dir: str,
-               vectorizer_method: int,
-               use_comma_tokenizer: bool,
-               use_binary_tokenizer: bool,
-               cluster_model: int
+def vectorizer(
+    images_dir: str,
+    feature_extraction_method_Radio: int,
+    # 文本聚类
+    text_vectorizer_method: Literal[0, 1],
+    use_comma_tokenizer: bool,
+    use_binary_tokenizer: bool,
+    text_feature_file_extension_name: str,
+    # wd14特征聚类
+    wd14_feature_layer_choice: Literal[0, 1],
+    wd14_feature_file_extension_name: str,
+    # 聚类方法
+    cluster_model: int,
 ) ->    Tuple[
             Tuple[
                 # 如果是tag聚类，则两个矩阵相同
@@ -98,134 +300,81 @@ def vectorizer(images_dir: str,
         dict,  # 确定聚类按钮
         ]:
 
-    """
-    读取images_dir下的图片或tags文本，用其生成特征向量
-    
-    images_dir为图片路径
-    vectorizer_method为特征提取方法
-        0 使用tfid
-        1 使用Count
-        2 使用WD14
-    use_comma_tokenizer对于前两种方法使用逗号分词器comma_tokenizer
-    use_binary_tokenizer对于前两种方法使用binary参数
-    cluster_model为聚类模型
-        0，1，2...等分别对应不同的聚类模型
-    
-    outputs=[vectorize_X_and_label_State, cluster_model_State, preprocess_Markdown]
+    """读取images_dir下的tags文本或者wd14_npz文件，用其生成特征向量
+
+    Args:
+        images_dir (str): 图片目录
+        feature_extraction_method_Radio (int): tag文本特征还是wd14特征
+            请对照 FEATURE_EXTRACTION_METHOD_LIST
+        text_vectorizer_method (int): tag文本特征提取方法
+            请对照 TEXT_VECTORIZATION_METHOD_LIST
+        use_comma_tokenizer (bool): 是否强制逗号分词
+        use_binary_tokenizer (bool): 是否tag频率二值化
+        text_feature_file_extension_name (str): tag文本文件扩展名
+        wd14_feature_layer_choice (int): wd14特征层选择
+            请对照 WD14_FEATURE_LAYER_CHOICE_LIST
+        wd14_feature_file_extension_name (str): wd14特征向量文件扩展名
+        cluster_model (int): 聚类模型选择
+            请对照 CLUSTER_MODEL_LIST
+
+    Returns:
+        _type_: outputs=[vectorize_X_and_label_State, cluster_model_State, preprocess_Markdown]
     """
 
-    
-    assert vectorizer_method in (0,1,2), f"未知的特征提取方法: {vectorizer_method}"
-    # tag聚类
-    if vectorizer_method in (0,1):
-        # 搜索存放tag的txt文本
-        searcher = SearchImagesTags(images_dir, tag_file_ext=tag_file_ext)
 
-        # 文本提取器参数
-        vectorizer_args_dict = dict(
-            tokenizer=comma_tokenizer if use_comma_tokenizer else None,
-            binary=use_binary_tokenizer,
-            max_df=0.99
+    global tag_file_ext, wd4_file_ext
+    # 先把指定tag和wd14向量的扩展名全局变量改了
+    tag_file_ext = text_feature_file_extension_name
+    wd4_file_ext = wd14_feature_file_extension_name
+    
+
+    if feature_extraction_method_Radio == 0:
+        X, tf_tags_list, image_files_list = text_vectorizer_func(
+            images_dir = images_dir,
+            text_vectorizer_method = text_vectorizer_method,
+            use_comma_tokenizer = use_comma_tokenizer,
+            use_binary_tokenizer = use_binary_tokenizer,
         )
-
-        # 选择特征提取器
-        if vectorizer_method == 0 :
-            tfvec = skt.TfidfVectorizer(**vectorizer_args_dict) # type: ignore
-        elif vectorizer_method == 1 :
-            tfvec = skt.CountVectorizer(**vectorizer_args_dict) # type: ignore
-
-        # tag内容, 用于文本提取
-        tag_content_list = searcher.tag_content(error_then_tag_is="_no_tag")
-        
-        # tags转为向量特征
-        X = tfvec.fit_transform(tag_content_list).toarray()  # type: ignore # 向量特征
-        X = (X, X)  # 为了与WD14的输出保持一致，这里将X变为二元组
-
-        tf_tags_list = tfvec.get_feature_names_out().tolist()  # 向量每列对应的tag
-        # stop_tags = tfvec.stop_words_  # 被过滤的tag
-
-        # 特征矩阵每行对应的文件名
-        image_files_list = searcher.image_files_list
-        assert image_files_list is not None, "image_files_list is None"
-    
-    # wd14特征向量聚类
-    elif vectorizer_method == 2 :
-
-        # 读取储存在.wd14.npz文件中的向量特征
-        searcher = SearchImagesTags(images_dir, tag_file_ext=wd4_file_ext)
-        npz_files_list = searcher.tag_files()  # 储存特征向量的文件名列表
-
-        skip = 2  # 取倒数第三层
-
-        # 用来暂存向量
-        X_inside = []  # 入口层，取决于skip
-        X_outside = []  # 出口层
-        error_indies = []  # 读取错误的文件索引
-        for index, npz_file in enumerate(npz_files_list):
-            try:
-                with np.load( os.path.join(images_dir, npz_file) ) as npz:
-                    X_inside.append(npz[f"layer{skip}"])
-                    X_outside.append(npz["layer0"])
-            except Exception as e:
-                logging.error(f"读取 {npz_file} 向量特征时出错，其将会被置一：\n{e}")
-                # 读错了就跳过
-                X_inside.append(None)
-                X_outside.append(None)
-                error_indies.append(index)  # 记录出错位置
-                continue
-        
-        if len(error_indies) == len(npz_files_list):
-            raise Exception("所有向量特征读取错误，无法继续")
-        
-        def check_error(need_check_list: List[np.ndarray], error_indies: List[int]):
-            """ 将错误读取的矩阵元素全部置一，会直接修改传入的need_check_list """
-
-            # 没有错误就不检查了
-            if not error_indies:
-                return
-            for temp in need_check_list:
-                # 找到一个不为空的正确元素，记录其中矩阵的维度，生成一个同样大小的一矩阵
-                # 赋值给需要检查列表中错误的元素
-                if temp is not None:
-                    # repalce_arr = np.zeros_like(temp)
-                    repalce_arr = np.ones_like(temp)
-                    for index in error_indies:
-                        need_check_list[index] = repalce_arr
-                    break
-        # 注意，请先检查数据，因为如果读取出错了列表里面会有None元素，无法转为矩阵
-        check_error(X_inside, error_indies)
-        check_error(X_outside, error_indies)
-        
-        # list[np.ndarray]  # np.ndarray.shape = (n_samples, n_features)
-        X = ( np.array(X_inside), np.array(X_outside) )
-
-        try:
-            # 读取对应的tag文件
-            with open( os.path.join(images_dir, wd14_vec_tag_file_name), "r", encoding="utf-8") as f:
-                tf_tags_list = f.read().splitlines()  # 向量每列对应的tag
-        except Exception as e:
-            logging.error(f"读取 wd14_vec_tag.wd14.txt 文件时出错，无法进行特征重要性分析，后续不会显示聚类标签：\n{e}")
-            # 出错了就生成与outside层特征维度数(列数)一样数量的标签"error"
-            tf_tags_list = [ "error" for i in range( X[1].shape[1] ) ]
-
-        # 特征矩阵每行对应的文件名
-        image_files_list = searcher.image_files_list
-        assert image_files_list is not None, "image_files_list is None"
+    elif feature_extraction_method_Radio == 1:
+        X, tf_tags_list, image_files_list = get_wd14_feature_func(
+            images_dir = images_dir,
+            wd14_feature_layer_choice = wd14_feature_layer_choice,
+        )
+    else:
+        raise ValueError(
+            (
+                f"feature_extraction_method_Radio = {feature_extraction_method_Radio}非法，"
+                f"目前只支持{[i for i in range(len(FEATURE_EXTRACTION_METHOD_LIST))]}"
+            )
+        )
 
 
     # TODO: 在WebUI中开放参数选择    
     # 聚类模型选择
     def _get_model(model_index) -> Union[skc.KMeans, skc.SpectralClustering, skc.AgglomerativeClustering, skc.OPTICS]:
+        cluser_model_choose_str = CLUSTER_MODEL_LIST[model_index]
+        print(f"选择了{cluser_model_choose_str}")
+
         if model_index == 0 :
-            cluster_model_State = skc.KMeans(n_init=7)
+            assert cluser_model_choose_str == "K-Means聚类"
+            cluster_model_State = skc.KMeans(n_init=KMEANS_N_INIT)
         elif model_index == 1 :
+            assert cluser_model_choose_str == "Spectral谱聚类"
             cluster_model_State = skc.SpectralClustering( affinity='cosine' )
         elif model_index == 2 :
+            assert cluser_model_choose_str == "Agglomerative层次聚类"
             cluster_model_State = skc.AgglomerativeClustering( metric='cosine', linkage='average' )
         elif model_index == 3 :
+            assert cluser_model_choose_str == "OPTICS聚类"
             cluster_model_State = skc.OPTICS( metric="cosine")
         else:
-            raise ValueError(f"聚类模型选择出错,错误值为: {model_index}")
+            raise ValueError(
+            (
+                f"cluser_model_choose_str = {cluser_model_choose_str}非法, "
+                f"目前只支持{[i for i in range(len(CLUSTER_MODEL_LIST))]}"
+            )
+        )
+
         return cluster_model_State
     cluster_model_State = _get_model(cluster_model)
     
@@ -264,12 +413,13 @@ def cluster_images_exception_wrapper(func) -> Callable:
     return wrapper
 
 @cluster_images_exception_wrapper
-def cluster_images(images_dir: str,
-                   confirmed_cluster_number: int,
-                   use_cache: bool,
-                   global_dict_State: dict,
-                   vectorize_X_and_label_State: Tuple,
-                   cluster_model_State,
+def cluster_images(
+    images_dir: str,
+    confirmed_cluster_number: int,
+    use_cache: bool,
+    global_dict_State: dict,
+    vectorize_X_and_label_State: Tuple,
+    cluster_model_State,
 ) -> List[dict]:
     """
     对指定目录下的图片进行聚类，将会使用该目录下与图片同名的txt中的tag做为特征
@@ -309,13 +459,14 @@ def cluster_images(images_dir: str,
     
     # 根据模型的不同设置不同的参数n
     # 目前是除了OPTICS，其他都是n_clusters
+    # TODO: 把设置n值部分提取出来，和聚类分析那一块重构为公共函数
     if "n_clusters" in cluster_model.get_params().keys():
         cluster_model.set_params(n_clusters=n_clusters)
     # 对应OPTICS聚类
     elif "min_samples" in cluster_model.get_params().keys():
         cluster_model.set_params(min_samples=n_clusters)
     else:
-        logging.error("选择的模型中，n参数指定出现问题")
+        assert False, "选择的模型中，n参数指定出现问题"
     
     print("聚类算法", type(cluster_model).__name__)
     if isinstance(X, np.ndarray):
@@ -353,7 +504,7 @@ def cluster_images(images_dir: str,
     try:
         pred_df.iloc[:,2:].astype(float)
     except Exception as e:
-        logging.error(f"pred_df的标签部分包含了非法值 error: {e}")
+        logging.error(f"pred_df的标签部分包含了非法值，可能后续会引发意外错误\nerror: {e}")
 
 
     def find_duplicate_tags(tags_df):
@@ -377,6 +528,7 @@ def cluster_images(images_dir: str,
         
         cluster_feature_tags_list = []
 
+        # TODO: 显示的重要性tag特征似乎有明显问题，需要尽快改进重要性tag的判断方法
         for i in clusters_ID:
             # 将第i类和其余的类二分类
             temp_pred = y_pred.copy()
@@ -403,6 +555,8 @@ def cluster_images(images_dir: str,
             negetive_tags_list = cluster_selected_tags_df.columns[ ~cluster_selected_tags_df.any(axis=0) ].tolist()
             
             # 最终的特征重要性分析结果，为一个列表，子元素为字典，字典中包含了每一个聚类的prompt和negetive tags
+            # 不要改 "prompt" 和 "negetive" 的名字，下面会用到
+            # TODO: 将 "prompt" 和 "negetive" 改为常量
             cluster_feature_tags_list.append( {"prompt":prompt_tags_list, "negetive":negetive_tags_list} )
             
         return cluster_feature_tags_list
@@ -419,7 +573,7 @@ def cluster_images(images_dir: str,
     global_dict_State["images_dir"] = images_dir
     
     # 缓存缩略图
-    cache_dir = os.path.join(images_dir, cache_folder_name)
+    cache_dir = os.path.join(images_dir, CACHE_FOLDER_NAME)
     if use_cache:
         cache_images_list = []
         for cluster in clustered_images_list:
@@ -439,8 +593,9 @@ def cluster_images(images_dir: str,
     visible_gr_gallery_list: List[dict] = []
     visible_gr_Accordion_list: List[dict] = []
     # 最多只能处理MAX_GALLERY_NUMBER个画廊
-    if len(clustered_images_list) > MAX_GALLERY_NUMBER:
-        logging.warning(f"聚类数超过了{MAX_GALLERY_NUMBER}个，只显示前{MAX_GALLERY_NUMBER}个")
+    clustered_images_list_len = len(clustered_images_list)
+    if clustered_images_list_len > MAX_GALLERY_NUMBER:
+        logging.warning(f"聚类数达到了{clustered_images_list_len}个，只显示前{MAX_GALLERY_NUMBER}个")
 
     for i in range( min( len(clustered_images_list), MAX_GALLERY_NUMBER ) ):
         gallery_images_tuple_list = [
@@ -528,7 +683,7 @@ def cluster_analyse(
         elif "min_samples" in cluster_model.get_params().keys():
             cluster_model.set_params(min_samples=k)
         else:
-            logging.error("选择的模型中，n参数指定出现问题")
+            assert False, "选择的模型中，n参数指定出现问题"
         
         y_pred = cluster_model.fit_predict(X) # 训练模型
         
@@ -637,25 +792,36 @@ def confirm_cluster(
     
     images_dir = global_dict_State.get("images_dir", "")
     clustered_images_list = global_dict_State.get("clustered_images_list", [] )
-    
+
+    # 输出信息的同时可以判断输入值是否非法
+    process_clusters_method_choose_str = PROCESS_CLUSTERS_METHOD_CHOICES[process_clusters_method]
+    print(f"选择了{process_clusters_method_choose_str}")
     
     # 带时间戳的重命名原图片和附带文件
     if process_clusters_method == 0:
+        assert process_clusters_method_choose_str == "重命名原图片(不推荐)"
         operation = "rename"
     # 在Cluster文件夹下生成聚类副本
     elif process_clusters_method == 1:
+        assert process_clusters_method_choose_str == f"在{cluster_dir_prefix}文件夹下生成聚类副本(推荐)"
         operation = "copy"
     # 移动原图至Cluster文件夹
     elif process_clusters_method == 2:
+        assert process_clusters_method_choose_str == f"移动原图至{cluster_dir_prefix}文件夹(大数据集推荐)"
         operation = "move"
     else:
-        assert False, "process_clusters_method参数错误"
+        raise ValueError(
+            (
+                f"process_clusters_method = {process_clusters_method}非法, "
+                f"目前只支持{[i for i in range(len(PROCESS_CLUSTERS_METHOD_CHOICES))]}"
+            )
+        )
 
     operate_images_file(
         images_dir,
         clustered_images_list,
-        extra_file_ext_list = extra_file_ext_list,
-        copy_to_subfolder_file_list = [wd14_vec_tag_file_name,],  # 把特征tag文件也复制到每一个子目录下
+        extra_file_ext_list = [tag_file_ext, wd4_file_ext],
+        copy_to_subfolder_file_list = [WD14_TAGS_TOML_FILE],  # 把特征tag文件也复制到每一个子目录下
         operation = operation,
     )
     

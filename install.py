@@ -20,7 +20,6 @@ pip_list = [### for all ###
             ### for cluster ###
             "\"scikit-learn >= 1.2.2\"",  # 在shell里执行这个指令需要用双引号括起来
             ### for tagger ###
-            "\"tensorflow>=2.10.1, <2.11\"",  # 在shell里执行这个指令需要用双引号括起来
             "huggingface_hub",
             "\"opencv-python>=4.7.0.68\"",
             "onnx",
@@ -33,7 +32,6 @@ test_list = ["pandas",
              "toml",
              "imagededup",
              "sklearn",
-             "tensorflow",
              "cv2",
              "onnx",
              "onnxruntime",
