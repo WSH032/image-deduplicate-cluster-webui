@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 import concurrent.futures
 import shutil
+from collections import Counter
 
 
 # 把torh放在onnxruntime的前面导入，让它调用它的cuda环境
@@ -67,6 +68,8 @@ TRT_ENGINE_CACHE_DIR = "trt_engine_cache"  # 用于缓存tensorrt引擎的子文
 DEFAULT_TAGGER_THRESHOLD = 0.35
 DEFAULT_TAGGER_CAPTION_EXTENSION = ".txt"
 
+WD14_TAGS_CATEGORY_LIST = ["rating", "general", "characters"]  # wd14标签的种类
+
 
 ######################################## 全局变量 ########################################
 
@@ -92,9 +95,9 @@ def read_wd14_tags_toml(wd14_tags_toml_path: str) -> Tuple[List[str], List[str],
         wd14_tags_list = wd14_tags_toml["tags"]
 
         # 硬编码，提醒我是否发生改变
-        assert wd14_tags_list[0]["name"] == "rating"
-        assert wd14_tags_list[1]["name"] == "general"
-        assert wd14_tags_list[2]["name"] == "characters"
+        assert wd14_tags_list[0]["name"] == WD14_TAGS_CATEGORY_LIST[0]
+        assert wd14_tags_list[1]["name"] == WD14_TAGS_CATEGORY_LIST[1]
+        assert wd14_tags_list[2]["name"] == WD14_TAGS_CATEGORY_LIST[2]
 
         rating_tags = wd14_tags_list[0]["tags"]
         general_tags = wd14_tags_list[1]["tags"]
@@ -255,11 +258,42 @@ def glob_images_pathlib(dir_path: Path, recursive: Optional[bool]) -> List[Path]
     return image_paths
 
 
+def check_same_name_path(path_list: Union[List[Path], List[str]]) -> List[List[str]]:
+    """检查path_list中的Path对象或者str对象是否有相同的名字（在扩展名不同的情况下）
+
+    Args:
+        path_list (Union[List[Path], List[str]]): 需要检查的Path对象或者str对象列表
+
+    Returns:
+        List[List[str]]: 相同名字的str对象列表，每一个子列表内是同一个相同名字的str对象集合
+    """
+    path_list = [str(path) for path in path_list]
+    path_without_ext_list = [os.path.splitext(path)[0] for path in path_list]  # 去掉扩展名
+    
+    counter = Counter(path_without_ext_list)  # 统计每个名字出现的次数
+    same_name_path_list = []  # 用于存放相同名字的索引
+
+    for same_name_path_without_ext, count in counter.most_common():
+        temp_sub_list = []
+        # 因为是降序排列，所以当count <= 1时，代表后面的不重复，就不用再看了
+        if count <= 1:
+            break
+        # 找到相同名字的索引，对应的就是相同名字的路径
+        for index, path_without_ext in enumerate(path_without_ext_list):
+            if path_without_ext == same_name_path_without_ext:
+                temp_sub_list.append(path_list[index])
+
+        if temp_sub_list:
+            same_name_path_list.append(temp_sub_list)
+    
+    return same_name_path_list
+
+
 def load_data(
-        train_data_dir: str,
-        recursive: Optional[bool] = None,
-        use_torch_dataloader: Optional[bool] = None,
-        **kwargs,
+    train_data_dir: str,
+    recursive: Optional[bool] = None,
+    use_torch_dataloader: Optional[bool] = None,
+    **kwargs,
 ) -> Union[ DataLoader, List[ List[ Tuple[None, Path] ] ] ]:
     """
     读取train_data_dir下的图片数据
@@ -279,6 +313,17 @@ def load_data(
 
     # 找出图片文件
     image_paths = glob_images_pathlib(Path(train_data_dir), recursive)
+    
+    # 因为run_batch中是通过os.path.splitext(image_path)[0] + ".txt"来写入标签文件的
+    # 所以同名，但是扩展名的不同的图片，前面的图片会被后面图片的标签文件覆盖
+    # 这里给用户一个警告
+    same_name_path_list = check_same_name_path(image_paths)
+    if same_name_path_list:
+        warning_str = "以下文件名字相同，但扩展名不同，每类中只有最后一个会有标签文件\n\n"
+        for sub_index, sub_list in enumerate(same_name_path_list):
+            warning_str = warning_str + f"第{sub_index}类\n" + "\n".join(sub_list) + "\n"
+
+        logging.warning(warning_str)
 
     # 読み込みの高速化のためにDataLoaderを使うオプション
     if use_torch_dataloader:
@@ -414,10 +459,10 @@ def run_batch(
 class Tagger:
 
     def __init__(
-            self,
-            model_dir: str,
-            model_type: int,
-            keep_updating: Optional[bool] = None,
+        self,
+        model_dir: str,
+        model_type: int,
+        keep_updating: Optional[bool] = None,
     ):
         """初始化，下载或更新模型和读取tags文件
 

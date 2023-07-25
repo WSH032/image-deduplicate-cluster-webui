@@ -122,7 +122,7 @@ def create_ui() -> gr.Blocks:
         with gr.Row():
             wd14_model_type = gr.Dropdown(
                 WD14_MODEL_TYPE_LIST,
-                label="模型选择",
+                label="模型选择（切换前请先释放模型）",
                 value=WD14_MODEL_TYPE_LIST[0],
                 type="index",
             )
@@ -147,8 +147,8 @@ def create_ui() -> gr.Blocks:
                 info="并发推理，加快速度，但占用更多内存，建议在GPU模式使用",
             )
         with gr.Row():
-            general_threshold = gr.Slider(label="general_threshold", value=DEFAULT_TAGGER_THRESHOLD, minimum=0, maximum=1.0, step=0.01, info="常规标签阈值")
-            characters_threshold = gr.Slider(label="characters_threshold", value=DEFAULT_TAGGER_THRESHOLD, minimum=0, maximum=1.0, step=0.01, info="特定角色标签阈值")
+            general_threshold = gr.Slider(label="general_threshold", value=DEFAULT_TAGGER_THRESHOLD, minimum=0, maximum=1.0, step=0.01, info="常规标签阈值（设置为1则不生成）")
+            characters_threshold = gr.Slider(label="characters_threshold", value=DEFAULT_TAGGER_THRESHOLD, minimum=0, maximum=1.0, step=0.01, info="特定角色标签阈值（设置为1则不生成）")
         with gr.Row():
             caption_extension = gr.Textbox(
                 label="tag文件扩展名",

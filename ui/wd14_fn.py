@@ -19,7 +19,7 @@ if not os.path.exists(WD14_MODEL_DIR):
 
 ############################## 全局变量 ##############################
 
-# 用于保存模型，避免每次都要加载模型，浪费时间
+# 用于保存模型类实例，避免每次都要加载模型，浪费时间
 # 注意这个不能放在gr.State中，否则刷新界面后就内存泄漏了
 tagger: Union[None, Tagger] = None
 
@@ -61,7 +61,7 @@ def use_wd14(
     # tensorrt相关
     if_use_tensorrt: bool,
     tensorrt_batch_size: int,
-    ) -> dict:
+) -> dict:
 
     # TODO: 让用户自行指定
     model_dir = WD14_MODEL_DIR  # 先把用户输入的目录强制覆盖掉

@@ -7,8 +7,9 @@ from datetime import datetime
 import shutil
 
 
-cluster_dir_prefix = "cluster"
-bit = 6  # 假设聚类数不超过999999
+CLUSTER_DIR_PREFIX = "cluster"
+BIT = 6  # 假设聚类数不超过999999
+DELIMITER = "-"  # 用于分隔聚类序号和图片名字
 
 
 def change_ext_with_old_name(path: str, new_ext: str) -> str:
@@ -27,7 +28,8 @@ def change_name_with_old_ext(path: str, new_name: str) -> str:
 
 # TODO: 最好加上修改时间
 # TODO: 有可能因为缓存失败照成图片无法显示，考虑返回缓存后的图片地址
-def cache_images_file(cache_images_list: List[str], cache_dir: str, resolution: int=512 ):
+# TODO: 或许能直接返回PIL.Image对象，而不是把图片保存在磁盘上
+def cache_images_file(cache_images_list: List[str], cache_dir: str, resolution: int=512 ) -> bool:
     """
     调用pillow，将重复的图片缓存到同路径下的一个cache文件夹中，分辨率最大为resolution,与前面图片名字一一对应
     如果存在同名文件就不缓存了
@@ -36,10 +38,15 @@ def cache_images_file(cache_images_list: List[str], cache_dir: str, resolution: 
         cache_images_list (List[str]): 需要缓存的图片路径列表，建议为绝对路径
         cache_dir (str): 缓存的文件夹路径
         resolution (int, optional): 缓存的分辨率. Defaults to 512.
+
+    Returns:
+        bool: 发生缓存错误则为True，否则为False
     """
     
     # 建一个文件夹
     os.makedirs(cache_dir, exist_ok=True)
+
+    exist_error = False  # TODO: 先暂时用这个告知发生缓存错误，通知画廊用原图；最好是把返回缓存后的图片地址返回去，失败的用源地址
     
     print("缓存缩略图中，caching...")
     for image_path in tqdm(cache_images_list):
@@ -51,9 +58,11 @@ def cache_images_file(cache_images_list: List[str], cache_dir: str, resolution: 
                     im.thumbnail( (resolution, resolution) )
                     im.save( os.path.join(cache_dir, image_name) )
             except Exception as e:
+                exist_error = True
                 logging.error(f"缓存 {image_path} 失败, error: {e}")
     print(f"缓存完成: {cache_dir}\nDone!")
 
+    return exist_error
 
 # TODO: 返回操作后图片的新绝对路径
 def operate_images_file(
@@ -104,10 +113,10 @@ def operate_images_file(
 
     for cluster_index, cluster in enumerate(clustered_images_list):
 
-        operate_prefix = f"{cluster_dir_prefix}-{cluster_index:0{bit}d}"  # 带有6位聚类序号
+        operate_prefix = f"{CLUSTER_DIR_PREFIX}{DELIMITER}{cluster_index:0{BIT}d}"  # 带有6位聚类序号
 
         # 需要加时间戳来避免重名
-        cluster_son_dir = os.path.join(images_dir, f"{cluster_dir_prefix}-{time_now}", operate_prefix)
+        cluster_son_dir = os.path.join(images_dir, f"{CLUSTER_DIR_PREFIX}{DELIMITER}{time_now}", operate_prefix)
         
         def create_subfolder_and_copy():
             """ 创建子文件夹并复制copy_to_subfolder_file_list中指定的文件到子文件夹中 """
