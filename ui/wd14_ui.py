@@ -126,7 +126,7 @@ def create_ui() -> gr.Blocks:
                 value=WD14_MODEL_TYPE_LIST[0],
                 type="index",
             )
-            keep_updating = gr.Checkbox(label="保存联网更新模型", value=True, info="取消勾选以进行离线模式")
+            keep_updating = gr.Checkbox(label="保持联网更新模型", value=True, info="取消勾选以进行离线模式")
             use_wd14_button = gr.Button("WD14模型打标", variant="primary")
             release_memory_button = gr.Button("释放内存或者显存中的模型", elem_classes="recommendation")
             # TODO: 先暂时不要让用户选择目录

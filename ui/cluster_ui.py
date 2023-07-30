@@ -24,6 +24,8 @@ from ui.cluster_fn import(
 
 ##############################  常量  ##############################
 
+WD14_TAGS_TOML_HUGGINGFACE_URL = "https://huggingface.co/WSH032/wd-v1-4-tagger-feature-extractor/blob/main/wd14_tags.toml"
+
 css = """
 .attention {color: red  !important}
 .recommendation {color: dodgerblue !important}
@@ -122,6 +124,7 @@ def create_ui() -> gr.Blocks:
                         value=WD14_TAGS_CATEGORY_LIST[1:],  # 默认不选第一个rating
                         label=f"用于聚类的标签种类（仅在'{WD14_FEATURE_LAYER_CHOICE_LIST[0]}'可选）",
                         type="index",
+                        info=f"您可以在[{WD14_TAGS_TOML_HUGGINGFACE_URL}]查看各个标签种类所包含的tags",
                     )
 
         with gr.Box():

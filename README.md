@@ -52,6 +52,7 @@
   - wd14聚类支持更多参数
     - 可选择 `压缩层` 或 `全向量` 层做为特征向量
 	- 在 `全向量` 模式下，可以自定义选择部分类别特征
+	  - 您可以在[https://huggingface.co/WSH032/wd-v1-4-tagger-feature-extractor/blob/main/wd14_tags.toml](https://huggingface.co/WSH032/wd-v1-4-tagger-feature-extractor/blob/main/wd14_tags.toml)查看各个标签种类所包含的tags
 	  - `rating` 依据 nsfw 进行聚类
 	  - `general` 依据图片标签tag进行聚类
 	  - `characters` 依据booru上已知的角色tag进行聚类

@@ -28,10 +28,10 @@ pip_list = [
 
 # 只要这个列表中有一个包不能被import，就尝试安装所有包
 test_list = [
-    "tqdm"
+    "tqdm",
     "pandas",
     "PIL",
-    "numpy"
+    "numpy",
     "toml",
     "imagededup",
     "sklearn",

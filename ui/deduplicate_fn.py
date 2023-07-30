@@ -73,7 +73,7 @@ def imagededup_mode_choose_trigger(imagededup_mode_index: int):
     return gr_Box_update_list
 
 
-##############################  查重模式选择  ##############################
+##############################  释放Torch内存  ##############################
 
 # TODO: 将deduplicator以全局变量形式存在，就像wd14聚类那样
 # 这样可以使用deduplicator=None更加深度的释放内存，但是这样需要多加一层模型是否改变判断

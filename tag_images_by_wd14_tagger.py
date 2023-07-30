@@ -52,7 +52,7 @@ TAG_FILES = [
     "selected_tags.csv",
 ]
 
-WD14_TAGS_TOML_FILE = TAG_FILES[2]  # 存储各列向量对应的tag
+WD14_TAGS_TOML_FILE = TAG_FILES[2]  # 存储各列向量对应的tag的文件的名字
 # 用于提醒我是否忘了修改
 assert WD14_TAGS_TOML_FILE == "wd14_tags.toml", "WD14_TAGS_TOML似乎不是'wd14_tags.toml'"
 
