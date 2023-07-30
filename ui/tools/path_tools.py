@@ -6,13 +6,13 @@
 
 import os
 
-path_tools_path = os.path.abspath(__file__)
+PATH_TOOLS_PATH = os.path.abspath(__file__)
 
-tools_dir = os.path.dirname(path_tools_path)
+TOOLS_DIR = os.path.dirname(PATH_TOOLS_PATH)
 
-ui_dir = os.path.dirname(tools_dir)
+UI_DIR = os.path.dirname(TOOLS_DIR)
 
-CWD = os.path.dirname(ui_dir)  # 整个项目的根目录
+CWD = os.path.dirname(UI_DIR)  # 整个项目的根目录
 """
 from tools import path_tools
 path_tools.CWD

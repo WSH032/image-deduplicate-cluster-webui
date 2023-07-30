@@ -2,62 +2,112 @@
 
 # from https://github.com/kohya-ss/sd-scripts/blob/16e5981d3153ba02c34445089b998c5002a60abc/finetune/tag_images_by_wd14_tagger.py
 
-"""
-！！！！！！
-注意，因为编译模型是在子进程中进行的
-所以需要保证sys.path包含这个.py文件的目录
-如果是在SD-WebUI中运行，需要在preload.py中添加此py文件所在目录到sys.path
-    已经完成了这一点，但是如果此文件位置发生改变，需要修改preload.py中的目录
-"""
 
-import argparse
-import csv
-import glob
 import os
 from typing import List, Optional, Tuple, Union
 import gc
 import time
 import logging
 from pathlib import Path
-import multiprocessing
 import concurrent.futures
+import shutil
+from collections import Counter
 
-# https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#lazy-loading
-os.environ['CUDA_MODULE_LOADING'] = 'LAZY'  # 设置懒惰启动，加快载入
 
-# 把torh放在tensorflow的前面导入，让它调用cuda环境给tensorflow
+# 把torh放在onnxruntime的前面导入，让它调用它的cuda环境
 import torch
 
 from PIL import Image
 import cv2
 from tqdm import tqdm
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras.models import load_model, Model  # type: ignore
-from tensorflow.keras.backend import clear_session  # type: ignore
 from huggingface_hub import hf_hub_download
-import tf2onnx
 import onnxruntime as ort
+import toml
+from torch.utils.data import DataLoader, Dataset
 
 
+# https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#lazy-loading
+os.environ['CUDA_MODULE_LOADING'] = 'LAZY'  # 设置懒惰启动，加快载入
+
+
+######################################## 常量 ########################################
 
 # from wd14 tagger
-IMAGE_SIZE = 448
-
-# wd-v1-4-swinv2-tagger-v2 / wd-v1-4-vit-tagger / wd-v1-4-vit-tagger-v2/ wd-v1-4-convnext-tagger / wd-v1-4-convnext-tagger-v2 / SmilingWolf/wd-v1-4-moat-tagger-v2
-DEFAULT_WD14_TAGGER_REPO = "SmilingWolf/wd-v1-4-convnext-tagger-v2"
-FILES = ["keras_metadata.pb", "saved_model.pb", "selected_tags.csv"]
-SUB_DIR = "variables"
-SUB_DIR_FILES = ["variables.data-00000-of-00001", "variables.index"]
-CSV_FILE = FILES[-1]
-
-ONNX_NAME = "wd14.onnx"  # 转换的onnx模型的名字
-MULTI_OUTPUT_NUMBER = 4  # 调整后输出层的数量, 注意，如果你动了这个，需要重构下面代码，包括run_batch和change_keras_to_onnx函数
-
-wd14_vec_tag_file_name = "wd14_vec_tag.wd14.txt"  # 存放wd14特征向量每列对应的tag的文件名
+IMAGE_SIZE = 448  # wd14 接受的图片尺寸
+IMAGE_MODE = "RGB"  # wd14 接受的图片模式
+IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".PNG", ".JPG", ".JPEG", ".WEBP", ".BMP"]
 
 
-def preprocess_image(image):
+DEFAULT_WD14_TAGGER_REPO = "WSH032/wd-v1-4-tagger-feature-extractor"
+WD14_MODEL_TYPE_LIST  = ["wd-v1-4-moat-tagger-v2", "wd-v1-4-convnextv2-tagger-v2"]
+WD14_MODEL_OPSET = 17
+DELIMITER = "_"  # 仓库里就是这么命名的，不要改
+
+
+TAG_FILES = [
+    "candidate_labels_scores_pt.npz",
+    "candidate_labels_scores_safetensors.npz",
+    "wd14_tags.toml",
+    "selected_tags.csv",
+]
+
+WD14_TAGS_TOML_FILE = TAG_FILES[2]  # 存储各列向量对应的tag的文件的名字
+# 用于提醒我是否忘了修改
+assert WD14_TAGS_TOML_FILE == "wd14_tags.toml", "WD14_TAGS_TOML似乎不是'wd14_tags.toml'"
+
+MULTI_OUTPUT_NUMBER = 4  # 调整后输出层的数量, 注意，如果你动了这个，需要重构下面代码，包括run_batch函数；模型的固有属性
+
+INPUT_NAME = "input_1"  # 模型输入层名字；模型的固有属性
+
+WD14_NPZ_EXTENSION = ".wd14.npz"  # 用于保存推理所得特征向量的文件扩展名 # .wd14用来区分kohya的潜变量cache
+WD14_NPZ_ARRAY_PREFIX = "layer"  # 所保存的npz文件中，特征向量的前缀名字，后面会加上层数，如layer0, layer1, layer2, layer3
+
+TRT_ENGINE_CACHE_DIR = "trt_engine_cache"  # 用于缓存tensorrt引擎的子文件夹名字，将会存放于模型文件夹内
+
+DEFAULT_TAGGER_THRESHOLD = 0.35
+DEFAULT_TAGGER_CAPTION_EXTENSION = ".txt"
+
+WD14_TAGS_CATEGORY_LIST = ["rating", "general", "characters"]  # wd14标签的种类
+
+
+######################################## 全局变量 ########################################
+
+
+
+
+
+######################################## 函数 ########################################
+
+def read_wd14_tags_toml(wd14_tags_toml_path: str) -> Tuple[List[str], List[str], List[str]]:
+    """读取tags文件
+
+    Args:
+        wd14_tags_toml_path (_type_): tags文件所在路径
+
+    Returns:
+        Tuple[List[str], List[str], List[str]]: 分别为rating_tags, general_tags, character_tags
+    """
+
+    # 读取标签
+    with open(wd14_tags_toml_path, "r") as f:
+        wd14_tags_toml = toml.load(f)
+        wd14_tags_list = wd14_tags_toml["tags"]
+
+        # 硬编码，提醒我是否发生改变
+        assert wd14_tags_list[0]["name"] == WD14_TAGS_CATEGORY_LIST[0]
+        assert wd14_tags_list[1]["name"] == WD14_TAGS_CATEGORY_LIST[1]
+        assert wd14_tags_list[2]["name"] == WD14_TAGS_CATEGORY_LIST[2]
+
+        rating_tags = wd14_tags_list[0]["tags"]
+        general_tags = wd14_tags_list[1]["tags"]
+        character_tags = wd14_tags_list[2]["tags"]
+    
+    return (rating_tags, general_tags, character_tags)
+
+
+def preprocess_image(image) -> np.ndarray:
+    """ 用于将输入图片预处理成模型可接受形式 """
     image = np.array(image)
     image = image[:, :, ::-1]  # RGB->BGR
 
@@ -72,32 +122,39 @@ def preprocess_image(image):
     interp = cv2.INTER_AREA if size > IMAGE_SIZE else cv2.INTER_LANCZOS4
     image = cv2.resize(image, (IMAGE_SIZE, IMAGE_SIZE), interpolation=interp)
 
-    image = image.astype(np.float32)
+    image = image.astype(np.float32)  # wd14要求是32精度
     return image
 
 
-class ImageLoadingPrepDataset(torch.utils.data.Dataset): # type: ignore
-    def __init__(self, image_paths):
+def load_image(image_path: Union[Path, str]) -> np.ndarray:
+    image = Image.open(image_path)
+    if image.mode != IMAGE_MODE:
+        image = image.convert(IMAGE_MODE)
+    image = preprocess_image(image)
+    return image
+
+
+class ImageLoadingPrepDataset(Dataset):
+    """ 用于多进程读取图片 """
+    def __init__(self, image_paths: Union[ List[str], List[Path] ]):
         self.images = image_paths
 
     def __len__(self):
         return len(self.images)
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx) -> Optional[Tuple[np.ndarray, str]]:
         img_path = str(self.images[idx])
 
         try:
-            image = Image.open(img_path).convert("RGB")
-            image = preprocess_image(image)
-            tensor = torch.tensor(image)
+            image_ndarray = load_image(img_path)
         except Exception as e:
             print(f"Could not load image path / 画像を読み込めません: {img_path}, error: {e}")
             return None
 
-        return (tensor, img_path)
+        return (image_ndarray, img_path)
 
 
-def collate_fn_remove_corrupted(batch):
+def collate_fn_remove_corrupted(batch) -> list:
     """Collate function that allows to remove corrupted examples in the
     dataloader. It expects that the dataloader returns 'None' when that occurs.
     The 'None's in the batch are removed.
@@ -106,68 +163,21 @@ def collate_fn_remove_corrupted(batch):
     batch = list(filter(lambda x: x is not None, batch))
     return batch
 
-def download_keras_model(repo_id: str, download_dir: str) -> None:
-    print(f"downloading wd14 tagger model from hf_hub. id: {repo_id}")
-    for file in FILES:
-        hf_hub_download(repo_id, file, cache_dir=download_dir, force_download=True, force_filename=file)
-    for file in SUB_DIR_FILES:
-        hf_hub_download(repo_id,
-                        file,
-                        subfolder=SUB_DIR,
-                        cache_dir=os.path.join(download_dir, SUB_DIR),
-                        force_download=True,
-                        force_filename=file,
-        )
-
-def change_keras_to_onnx(input_keras_model_dir, output_onnx_model_path: str) -> None:
-    time_start = time.time()
-    print("开始将kera模型转换成onnx格式，请耐心等待...")
-    # 载入模型
-    print("载入keras模型...")
-    keras_model = load_model(input_keras_model_dir)
-    print("载入keras模型完成")
-    # 获取中间层
-    layer0 = keras_model.get_layer(index=-1) # 获取最后一层的对象，predictions_sigmoid 预测层
-    layer1 = keras_model.get_layer(index=-2) # 获取倒数第二层的对象
-    layer2 = keras_model.get_layer(index=-3) # 获取倒数第三层的对象，predictions_norm 层
-    layer3 = keras_model.get_layer(index=-4) # 获取倒数第四层的对象
-    # 重构为四层输出
-    multi_ouput_model = Model(inputs=keras_model.input,
-                                outputs=[layer0.output,
-                                        layer1.output,
-                                        layer2.output,
-                                        layer3.output,
-                                ]
-                        )
-    # 构建onnx输入层
-    multi_ouput_model_input = multi_ouput_model.input
-    # name=multi_ouput_model_input.name  # 似乎不指定他也能自己推断出来
-    spec = [tf.TensorSpec(shape = multi_ouput_model_input.shape,
-                            dtype = multi_ouput_model_input.dtype,
-                            name = "input_1", # 不能改变，因为后面进行tensorrt动态转换时候需要同样的名字
-            ) # type: ignore
-    ]
-    # 转换为onnx模型
-    print("开始转换为onnx模型...")
-    tf2onnx.convert.from_keras(multi_ouput_model,
-                               input_signature=spec,  # input_signature=None # 不指定似乎他也能推断出来
-                               output_path=output_onnx_model_path,
-    )
-    print(f"转换完成，总共用时{time.time() - time_start}秒")
 
 def get_tensorrt_engine(trt_engine_cache_path:str ,tensorrt_batch_size: int) -> Tuple[str, dict]:
-    # 缓存在与onnx模型同目录下的'trt_engine_cache'文件夹中
-    Tensorrt_options = {"trt_timing_cache_enable": True,  # 时序缓存,可以适用于多个模型
-                        "trt_engine_cache_enable": True,  # 开启引擎缓存,针对特定模型、推理参数、GPU
-                        "trt_engine_cache_path":trt_engine_cache_path,
-                        # "trt_fp16_enable": False,  # FP16模式，需要GPU支持
-                        # "trt_int8_enable": False,  # INT8模式，需要GPU支持
-                        # "trt_dla_enable": False,  # DLA深度学习加速器，需要GPU支持
-                        "trt_build_heuristics_enable" : True,  # 启用启发式构建，减少时间
-                        "trt_builder_optimization_level": 3,  # 优化等级，越小耗时越少，但优化更差，不建议低于3
-                        "trt_profile_min_shapes": "input_1:1x448x448x3",  # 最小输入形状
-                        "trt_profile_max_shapes": f"input_1:{tensorrt_batch_size}x448x448x3",  # 最大输入形状
-                        "trt_profile_opt_shapes": f"input_1:{tensorrt_batch_size}x448x448x3",  # 优化输入形状
+
+    Tensorrt_options = {
+        "trt_timing_cache_enable": True,  # 时序缓存,可以适用于多个模型
+        "trt_engine_cache_enable": True,  # 开启引擎缓存,针对特定模型、推理参数、GPU
+        "trt_engine_cache_path":trt_engine_cache_path,
+        # "trt_fp16_enable": False,  # FP16模式，需要GPU支持
+        # "trt_int8_enable": False,  # INT8模式，需要GPU支持
+        # "trt_dla_enable": False,  # DLA深度学习加速器，需要GPU支持
+        "trt_build_heuristics_enable" : True,  # 启用启发式构建，减少时间
+        "trt_builder_optimization_level": 3,  # 优化等级，越小耗时越少，但优化更差，不建议低于3
+        "trt_profile_min_shapes": f"{INPUT_NAME}:1x{IMAGE_SIZE}x{IMAGE_SIZE}x3",  # 最小输入形状
+        "trt_profile_max_shapes": f"{INPUT_NAME}:{tensorrt_batch_size}x{IMAGE_SIZE}x{IMAGE_SIZE}x3",  # 最大输入形状
+        "trt_profile_opt_shapes": f"{INPUT_NAME}:{tensorrt_batch_size}x{IMAGE_SIZE}x{IMAGE_SIZE}x3",  # 优化输入形状
     }
     Tensorrt_provider = ("TensorrtExecutionProvider", Tensorrt_options)
 
@@ -182,384 +192,583 @@ Warning: Please clean up any old engine and profile cache files (.engine and .pr
 """)
     return Tensorrt_provider
 
-"""
-或许我们可以把session_in_memory用全局变量代替，而不是使用传入参数
-这样在import调用的时候，可以用类似为类属性赋值的方法来释放模型
-"""
-def main(args,
-         session_in_memory: Optional[ort.InferenceSession] = None,
-) -> ort.InferenceSession :
-    
-    # hf_hub_downloadをそのまま使うとsymlink関係で問題があるらしいので、キャッシュディレクトリとforce_filenameを指定してなんとかする
-    # depreacatedの警告が出るけどなくなったらその時
-    # https://github.com/toriato/stable-diffusion-webui-wd14-tagger/issues/22
 
-    onnx_model_path = os.path.join(args.model_dir, ONNX_NAME)
-    keras_model_sub_dir = os.path.join(args.model_dir, SUB_DIR)
+def set_providers(
+    tensorrt_batch_size: Optional[int] = None,
+    trt_engine_cache_path: Optional[str] = None,
+) -> list:
+    """
+    返回ort.InferenceSession的providers参数
+    只有tensorrt_batch_size和trt_engine_cache_path都合法输入，才会调用get_tensorrt_engine()返回tensorrt执行参数
+
+    Args:
+        tensorrt_batch_size (Optional[int], optional): 当为大于0的整数时，会尝试以该batch_size调用tensorrt. Defaults to None.
+        trt_engine_cache_path (str, Path): 用于缓存tensorrt引擎的目录，实际上是个文件夹
+
+    Returns:
+        list: 返回ort.InferenceSession的providers参数
+    """
+
+    # 配置执行者
+    providers =  ort.get_available_providers()
+    # 先判断是否大于等于2，因为有些用户可能没安装gpu版本，就只有CPU执行者
+    if len(providers) >= 2:
+        # 最后一个一般是CPU，倒数第二个一般是GPU
+        providers = providers[-2:] if torch.cuda.is_available() else [ providers[-1] ]
     
-    # 如果下自文件夹下没有{SUB_DIR}这个子目录，代表没下载过keras模型，则启动下载；如果要求强制下载，也启动下载
-    if not os.path.exists(keras_model_sub_dir) or args.force_download:
-        download_keras_model(args.repo_id, args.model_dir)
-    # 如果onnx_model_path不存在，待变没转换过onnx模型，则启动转换；如果要求强制转换，也启动转换
-    if not os.path.exists(onnx_model_path) or args.force_download:
-        # 放到另一个进程里，因为tensorflow无法正常释放内存，要把进程结束了才能释放
-        p = multiprocessing.Process( target=change_keras_to_onnx, args=(args.model_dir, onnx_model_path,) )
-        p.start()
-        p.join()
+    # 不要判断trt_engine_cache_path的类，因为可能是str，或者Path，或者别的什么
+    if isinstance(tensorrt_batch_size, int) and tensorrt_batch_size > 0 and trt_engine_cache_path :
+
+        # 加入带缓存参数的TensorRT执行者
+        providers = [ get_tensorrt_engine(trt_engine_cache_path, tensorrt_batch_size) ] + providers
+        # 提示信息
+        print("#"*20 + "\n")
+        print("使用TensorRT执行者,首次使用或者tensorrt_batch_side发生改变时，需要重新编译模型，耗时较久，请耐心等待，可以使用任务管理器跟踪显卡的使用")
+        print("\n" + "#"*20)
+
+    print("可用设备")
+    for name in providers:
+        print(name)
+
+    return providers
+
+
+def glob_images_pathlib(dir_path: Path, recursive: Optional[bool]) -> List[Path]:
+    """找出符合模式的文件
+
+    Args:
+        dir_path (Path): 所搜寻的目录
+        recursive (bool): 是否递归搜寻
+
+    Returns:
+        List[Path]: 符合模式的文件Path对象list
+    """
+    print(f"searching images in {dir_path}")
+    image_paths = []
+    if recursive:
+        for ext in IMAGE_EXTENSIONS:
+            image_paths += list(dir_path.rglob("*" + ext))
     else:
-        print("using existing wd14 tagger model")
-
-    # label_names = pd.read_csv("2022_0000_0899_6549/selected_tags.csv")
-    # 依存ライブラリを増やしたくないので自力で読むよ
-
-    with open(os.path.join(args.model_dir, CSV_FILE), "r", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        l = [row for row in reader]
-        header = l[0]  # tag_id,name,category,count
-        rows = l[1:]
-    assert header[0] == "tag_id" and header[1] == "name" and header[2] == "category", f"unexpected csv format: {header}"
-
-    general_tags = [row[1] for row in rows[1:] if row[2] == "0"]
-    character_tags = [row[1] for row in rows[1:] if row[2] == "4"]
-
-    # 画像を読み込む
-    
-    IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".PNG", ".JPG", ".JPEG", ".WEBP", ".BMP"]
-    
-    def glob_images_pathlib(dir_path, recursive):
-        image_paths = []
-        if recursive:
-            for ext in IMAGE_EXTENSIONS:
-                image_paths += list(dir_path.rglob("*" + ext))
-        else:
-            for ext in IMAGE_EXTENSIONS:
-                image_paths += list(dir_path.glob("*" + ext))
-        image_paths = list(set(image_paths))  # 重複を排除
-        image_paths.sort()
-        return image_paths
-    
-    train_data_dir_path = Path(args.train_data_dir)
-    print(f"searching images in {train_data_dir_path}")
-    image_paths = glob_images_pathlib(train_data_dir_path, args.recursive)
-
-    # tag保留一份用于聚类时候进行特征重要性分析
-    _all_tag_list = [ row[1] for row in rows ]  # 读取所有的tag名字
-    np.savetxt( os.path.join(train_data_dir_path, wd14_vec_tag_file_name),
-                np.array(_all_tag_list),
-                delimiter=',',
-                fmt='%s'
-    )
-    
+        for ext in IMAGE_EXTENSIONS:
+            image_paths += list(dir_path.glob("*" + ext))
+    image_paths = list(set(image_paths))  # 重複を排除
+    image_paths.sort()
     print(f"found {len(image_paths)} images.")
 
-    tag_freq = {}
+    return image_paths
 
-    undesired_tags = set(args.undesired_tags.split(","))
 
-    def set_providers() -> list:
-        # 配置执行者
-        providers =  ort.get_available_providers()
-        if len(providers) >= 2:
-            # 最后一个一般是CPU，倒数第二个一般是GPU
-            providers = providers[-2:] if torch.cuda.is_available() else [ providers[-1] ]
-        if args.tensorrt:
-            # 加入带缓存参数的TensorRT执行者
-            trt_engine_cache_path = os.path.join( os.path.dirname(onnx_model_path), "trt_engine_cache" )
-            providers = [ get_tensorrt_engine(trt_engine_cache_path, args.tensorrt_batch_size) ] + providers
-            print("#"*20)
-            print("\n")
-            print("使用TensorRT执行者,首次使用或者tensorrt_batch_side发生改变时，需要重新编译模型，耗时较久，请耐心等待，可以使用任务管理器跟踪显卡的使用")
-            print("\n")
-            print("#"*20)
-        print("可用设备")
-        for name in providers:
-            print(name)
-        return providers
-   
+def check_same_name_path(path_list: Union[List[Path], List[str]]) -> List[List[str]]:
+    """检查path_list中的Path对象或者str对象是否有相同的名字（在扩展名不同的情况下）
 
-    # 载入模型
-    # 如果没有从外部传入一个已经在内存里的模型，则重新载入一个
-    if session_in_memory is None:
-        print("载入新的模型")
-        InferenceSession_time_start = time.time()
-        providers = set_providers()
-        ort_session = ort.InferenceSession(onnx_model_path, providers=providers) # type: ignore
-        print("载入模型用时", time.time() - InferenceSession_time_start, "秒")
-    # 从外部传入了一个已经在内存里的模型，则直接使用
-    else:
-        print("使用内存中的模型")
-        ort_session = session_in_memory
+    Args:
+        path_list (Union[List[Path], List[str]]): 需要检查的Path对象或者str对象列表
+
+    Returns:
+        List[List[str]]: 相同名字的str对象列表，每一个子列表内是同一个相同名字的str对象集合
+    """
+    path_list = [str(path) for path in path_list]
+    path_without_ext_list = [os.path.splitext(path)[0] for path in path_list]  # 去掉扩展名
     
-    outputs_name_list = [x.name for x in ort_session.get_outputs()]
-    inputs_name_list = [x.name for x in ort_session.get_inputs()]
+    counter = Counter(path_without_ext_list)  # 统计每个名字出现的次数
+    same_name_path_list = []  # 用于存放相同名字的索引
+
+    for same_name_path_without_ext, count in counter.most_common():
+        temp_sub_list = []
+        # 因为是降序排列，所以当count <= 1时，代表后面的不重复，就不用再看了
+        if count <= 1:
+            break
+        # 找到相同名字的索引，对应的就是相同名字的路径
+        for index, path_without_ext in enumerate(path_without_ext_list):
+            if path_without_ext == same_name_path_without_ext:
+                temp_sub_list.append(path_list[index])
+
+        if temp_sub_list:
+            same_name_path_list.append(temp_sub_list)
     
-
-    assert len(inputs_name_list) == 1, "onnx模型输入层不止一个，可能你使用的模型不是本项目的模型"
-    assert len(outputs_name_list) == MULTI_OUTPUT_NUMBER, f"onnx模型输出层不是{MULTI_OUTPUT_NUMBER}个，可能你使用的模型不是本项目的模型"
-
-    def run_batch(path_imgs):
-        imgs = np.array([im for _, im in path_imgs])
-
-        ort_inputs = {inputs_name_list[0]: imgs}
-        ort_out = ort_session.run(outputs_name_list, ort_inputs)
-
-        layer0_output, layer1_output, layer2_output, layer3_output = ort_out
-
-        probs = layer0_output  # kohya原来就是这样命名的，我懒得改下面代码
-
-        # 写入文本
-        for_index = 0  # 起到循环计数器的作用
-        for (image_path, _), prob in zip(path_imgs, probs): # type: ignore
-            # 最初の4つはratingなので無視する
-            # # First 4 labels are actually ratings: pick one with argmax
-            # ratings_names = label_names[:4]
-            # rating_index = ratings_names["probs"].argmax()
-            # found_rating = ratings_names[rating_index: rating_index + 1][["name", "probs"]]
-
-            # それ以降はタグなのでconfidenceがthresholdより高いものを追加する
-            # Everything else is tags: pick any where prediction confidence > threshold
-            combined_tags = []
-            general_tag_text = ""
-            character_tag_text = ""
-            for i, p in enumerate(prob[4:]):
-                if i < len(general_tags) and p >= args.general_threshold:
-                    tag_name = general_tags[i]
-                    if args.remove_underscore and len(tag_name) > 3:  # ignore emoji tags like >_< and ^_^
-                        tag_name = tag_name.replace("_", " ")
-
-                    if tag_name not in undesired_tags:
-                        tag_freq[tag_name] = tag_freq.get(tag_name, 0) + 1
-                        general_tag_text += ", " + tag_name
-                        combined_tags.append(tag_name)
-                elif i >= len(general_tags) and p >= args.character_threshold:
-                    tag_name = character_tags[i - len(general_tags)]
-                    if args.remove_underscore and len(tag_name) > 3:
-                        tag_name = tag_name.replace("_", " ")
-
-                    if tag_name not in undesired_tags:
-                        tag_freq[tag_name] = tag_freq.get(tag_name, 0) + 1
-                        character_tag_text += ", " + tag_name
-                        combined_tags.append(tag_name)
-
-            # 先頭のカンマを取る
-            if len(general_tag_text) > 0:
-                general_tag_text = general_tag_text[2:]
-            if len(character_tag_text) > 0:
-                character_tag_text = character_tag_text[2:]
-
-            tag_text = ", ".join(combined_tags)
-            
-            with open(os.path.splitext(image_path)[0] + args.caption_extension, "wt", encoding="utf-8") as f:
-                f.write(tag_text + "\n")
-                if args.debug:
-                    print(f"\n{image_path}:\n  Character tags: {character_tag_text}\n  General tags: {general_tag_text}")
+    return same_name_path_list
 
 
-            # 矩阵写入同名的npz文件
-            np.savez(os.path.splitext(image_path)[0] + ".wd14.npz",  # wd14用来区分kohya的潜变量cache
-                    layer0=layer0_output[for_index],
-                    layer1=layer1_output[for_index],
-                    layer2=layer2_output[for_index],
-                    layer3=layer3_output[for_index]
-            )
-            for_index += 1
+def load_data(
+    train_data_dir: str,
+    recursive: Optional[bool] = None,
+    use_torch_dataloader: Optional[bool] = None,
+    **kwargs,
+) -> Union[ DataLoader, List[ List[ Tuple[None, Path] ] ] ]:
+    """
+    读取train_data_dir下的图片数据
+    由use_torch_dataloader决定是否使用DataLoader
+    否则返回一个list，其元素也是list，子list的元素是一个元组，第一个元素为None，第二个元素为图片的Path对象
+        后续需要你自己处理图片数据
 
-     
+    Args:
+        train_data_dir (str): 所需要读取的图片目录
+        recursive (Optional[bool], optional): 递归读取. Defaults to None.
+        use_torch_dataloader (Optional[bool], optional): 是否使用DataLoader. Defaults to None.
+        **kwargs: DataLoader的参数
+
+    Returns:
+        _type_: List[ List[ Tuple[None | np.ndarray, Path] ] ] ]
+    """
+
+    # 找出图片文件
+    image_paths = glob_images_pathlib(Path(train_data_dir), recursive)
+    
+    # 因为run_batch中是通过os.path.splitext(image_path)[0] + ".txt"来写入标签文件的
+    # 所以同名，但是扩展名的不同的图片，前面的图片会被后面图片的标签文件覆盖
+    # 这里给用户一个警告
+    same_name_path_list = check_same_name_path(image_paths)
+    if same_name_path_list:
+        warning_str = "以下文件名字相同，但扩展名不同，每类中只有最后一个会有标签文件\n\n"
+        for sub_index, sub_list in enumerate(same_name_path_list):
+            warning_str = warning_str + f"第{sub_index}类\n" + "\n".join(sub_list) + "\n"
+
+        logging.warning(warning_str)
+
     # 読み込みの高速化のためにDataLoaderを使うオプション
-    if args.max_data_loader_n_workers is not None:
-        print(f"启用max_data_loader_n_workers，将使用{args.max_data_loader_n_workers}个进程进行数据读取")
+    if use_torch_dataloader:
+        print("将使用 torch.utils.DataLoader 进行数据读取")
         dataset = ImageLoadingPrepDataset(image_paths)
-        """
-        # 在子进程里使用需要在import一次，我也不知道为什么，别删
-        # 我现在把它删了，报错也没再次出现，很奇怪？？？
-        # 或许我们需要改变上下文继承为fork？
-        # import torch
-        """
-        data = torch.utils.data.DataLoader( # type: ignore
+        data = DataLoader(
             dataset,
-            batch_size=args.batch_size,
             shuffle=False,
-            num_workers=args.max_data_loader_n_workers,
-            collate_fn=collate_fn_remove_corrupted,
+            collate_fn=collate_fn_remove_corrupted,  # 注意，这个会导致损坏的那一批次的图片数量可能不是batch_size
             drop_last=False,
+            **kwargs,
         )
     else:
         data = [[(None, ip)] for ip in image_paths]
 
+    return data
+
+
+def undesired_tags_str_to_list(undesired_tags: Optional[str] =  None) -> List[str]:
+    """ 输入的undesired_tags使用逗号分割 """
+    undesired_tags_list = []
+    if isinstance(undesired_tags, str) and undesired_tags:
+        undesired_tags_list = undesired_tags.split(",")
+        undesired_tags_list = [tag.strip() for tag in undesired_tags_list]
+        undesired_tags_list = list( set(undesired_tags_list) )
+    return undesired_tags_list
+
+
+def run_batch(
+    path_imgs: List[Tuple[str, np.ndarray]],
+    ort_session: ort.InferenceSession,
+    rating_tags: List[str],
+    general_tags: List[str],
+    characters_tags: List[str],
+    general_threshold: float = DEFAULT_TAGGER_THRESHOLD,
+    characters_threshold: float = DEFAULT_TAGGER_THRESHOLD,
+    caption_extension: str = DEFAULT_TAGGER_CAPTION_EXTENSION,
+    remove_underscore: Optional[bool] = None,
+    rating: Optional[bool] = None,
+    debug: Optional[bool] = None,
+    undesired_tags_list: List[str] = [],
+):
     
+    # 如果batch_size > 1，变为一个二维矩阵
+    imgs = np.array([im for _, im in path_imgs])
 
-    # 启用了tensorrt的话，batch_size应该被限制在tensorrt_batch_size以内，不然需要重新编译
-    if args.tensorrt:
-        inference_batch = min(args.batch_size, args.tensorrt_batch_size)
-    else:
-        inference_batch = args.batch_size
+    # 一定是一个元素
+    inputs_name_list = [x.name for x in ort_session.get_inputs()]
+    # 一定是{MULTI_OUTPUT_NUMBER}个元素
+    outputs_name_list = [x.name for x in ort_session.get_outputs()]
 
-    # 如果使用并行推理，那么就创建线程池来管理进程
-    # 设置成1就行了，主要是不让GPU推理阻塞CPU上数据集读取
-    # 更快的并发应该通过调大batch_size来实现，而不是通过多线程
-    # ！！！ 如果不为1，会出现争抢问题，会带来死锁；需要把ort.InferenceSession放在run_batch里 ！！！
-    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1) if args.concurrent_inference else None
-    if pool is not None:
-        print("并发推理已启用，将使用将使用线程池进行推理")
+    # 进行推理
+    ort_inputs = {inputs_name_list[0]: imgs}
+    ort_out = ort_session.run(outputs_name_list, ort_inputs)
 
-    pool_futures_list = []  # 用于跟踪进程完成进度
-    b_imgs = []
-    tqdm.write("分配进程中...")
-    for data_entry in tqdm( data, smoothing=0.0, total=len(data) ):
-        for data in data_entry:
-            if data is None:
-                continue
+    # 获得四个层的推理结果
+    layer0_output, layer1_output, layer2_output, layer3_output = ort_out
 
-            image, image_path = data
-            if image is not None:
-                image = image.detach().numpy()
-            else:
-                try:
-                    image = Image.open(image_path)
-                    if image.mode != "RGB":
-                        image = image.convert("RGB")
-                    image = preprocess_image(image)
-                except Exception as e:
-                    print(f"Could not load image path / 画像を読み込めません: {image_path}, error: {e}")
-                    continue
-            b_imgs.append((image_path, image))
+    # 最外层的推理结果
+    probs = layer0_output  # kohya原来就是这样命名的，我懒得改下面代码
 
-            if len(b_imgs) >= inference_batch:
+    # 用于确定各类tags所对应的向量索引区间
+    rating_tags_len = len(rating_tags)
+    general_tags_len = len(general_tags)
+
+    # 写入文本
+    for_index = 0  # 起到循环计数器的作用，代表当前处理的行，即当前处理的样本
+    for (image_path, _), prob in zip(path_imgs, probs):
+
+        combined_tags = []  # 用于保存所有的tag
+        general_tag_text = ""
+        characters_tag_text = ""
+
+        # rating_tags
+        if rating:
+            rating_prob = prob[ : rating_tags_len ]
+            # 找到rating_prob中最大的那个
+            max_rating_prob_index = np.argmax(rating_prob)
+            combined_tags = [rating_tags[max_rating_prob_index]] + combined_tags
+        # general_tags
+        for i, p in enumerate( prob[ rating_tags_len : rating_tags_len + general_tags_len ] ):
+            if p >= general_threshold:
+                tag_name = general_tags[i]
+                # 替换下划线为空格
+                if remove_underscore and len(tag_name) > 3:  # ignore emoji tags like >_< and ^_^
+                    tag_name = tag_name.replace("_", " ")
+                # 不在不想要的词列表里就把它加进去
+                if tag_name not in undesired_tags_list:
+                    general_tag_text += ", " + tag_name
+                    combined_tags.append(tag_name)
+        # characters_tags
+        for i, p in enumerate( prob[ rating_tags_len + general_tags_len :  ] ):
+            if p >= characters_threshold:
+                tag_name = characters_tags[i]
+                # 替换下划线为空格
+                if remove_underscore and len(tag_name) > 3:  # ignore emoji tags like >_< and ^_^
+                    tag_name = tag_name.replace("_", " ")
+                # 不在不想要的词列表里就把它加进去
+                if tag_name not in undesired_tags_list:
+                    characters_tag_text += ", " + tag_name
+                    combined_tags.append(tag_name)
+
+        # 先頭のカンマを取る
+        if len(general_tag_text) > 0:
+            general_tag_text = general_tag_text[2:]
+        if len(characters_tag_text) > 0:
+            characters_tag_text = characters_tag_text[2:]
+
+        tag_text = ", ".join(combined_tags)
+        
+        with open(os.path.splitext(image_path)[0] + caption_extension, "wt", encoding="utf-8") as f:
+            f.write(tag_text + "\n")
+            if debug:
+                print(f"\n{image_path}:\n  Characters tags: {characters_tag_text}\n  General tags: {general_tag_text}")
+
+        # 矩阵写入同名的npz文件
+        np_savez_kwargs = {
+            f"{WD14_NPZ_ARRAY_PREFIX}0": layer0_output[for_index],
+            f"{WD14_NPZ_ARRAY_PREFIX}1": layer1_output[for_index],
+            f"{WD14_NPZ_ARRAY_PREFIX}2": layer2_output[for_index],
+            f"{WD14_NPZ_ARRAY_PREFIX}3": layer3_output[for_index],
+        }
+
+        np.savez(
+            os.path.splitext(image_path)[0] + WD14_NPZ_EXTENSION,
+            **np_savez_kwargs,
+        )
+        # 处理下个样本
+        for_index += 1
+
+
+
+class Tagger:
+
+    def __init__(
+        self,
+        model_dir: str,
+        model_type: int,
+        keep_updating: Optional[bool] = None,
+    ):
+        """初始化，下载或更新模型和读取tags文件
+
+        Args:
+            model_dir (str): 模型所在目录，建议为绝对路径；如果不存在模型会尝试下载
+            model_type (int): 模型类型的序号，请对照WD14_MODEL_TYPE_LIST
+            keep_updating (Optional[bool], optional): 当不为真时，只要文件存在，就不会再下载和尝试更新. Defaults to None.
+        """
+
+        ### 注意，以下初始化会有一定的执行顺序要求，修改前请注意 ###
+
+        self.model_dir = model_dir  # 模型项目所在文件夹路径
+        self.model_type = model_type  # 模型类型序号
+        self.model_type_name = WD14_MODEL_TYPE_LIST[model_type]  # 模型类型名字，也是onnx模型所在的子文件夹名字
+
+        # 存放tags文件的wd14_tags.toml的路径
+        self.wd14_tags_toml_path = os.path.join(model_dir, WD14_TAGS_TOML_FILE)
+
+        # onnx模型文件名字，类似：wd-v1-4-moat-tagger-v2_opset17.onnx
+        self.model_name = (
+            self.model_type_name + 
+            DELIMITER +
+            f"opset{WD14_MODEL_OPSET}" +
+            ".onnx"
+        )
+
+        # onnx 模型所在路径
+        self.model_path = os.path.join(model_dir, self.model_type_name, self.model_name)
+
+        # 用于保存模型，避免每次都要加载模型，浪费时间
+        self.model_in_memory: Union[None, ort.InferenceSession] = None
+
+        #################### 调用实例方法初始化 ####################
+
+        # 先运行一次下载，保证文件一定存在 ！！！
+        self.download_model(keep_updating=keep_updating)
+
+        # 读取标签
+        # 所有模型都共用同样的标签文件，所以可以直接在这里初始化
+        # 请先运行self.download_model()以保证文件一定存在  ！！！
+        self.tags = read_wd14_tags_toml(self.wd14_tags_toml_path)
+
+
+    def download_model(self, keep_updating: Optional[bool] = None) -> None:
+        """
+        从抱脸下载相关的tag文件和模型
+
+        Args:
+            keep_updating (Optional[bool], optional): 当不为真时，只要文件存在，就不会再下载和尝试更新. Defaults to None.
+
+        这个实例方法不需要你来调用，一般在 __init__() 中调用
+        """
+
+        # hf_hub_downloadをそのまま使うとsymlink関係で問題があるらしいので、キャッシュディレクトリとforce_filenameを指定してなんとかする
+        # depreacatedの警告が出るけどなくなったらその時
+        # https://github.com/toriato/stable-diffusion-webui-wd14-tagger/issues/22
+
+        download_dir = self.model_dir  # 下载到指定的模型项目目录
+        wd14_model_dir_name_in_repo = self.model_type_name  # 模型类型名字与模型在repo中的文件夹同名
+        model_name = self.model_name  # onnx模型文件名称
+        model_path = self.model_path  # 预计onnx模型会被下载到的位置
+
+        # 下载与tags有关的文件
+        for file in TAG_FILES:
+            if not os.path.exists( os.path.join(download_dir, file) ) or keep_updating:
+                print(f"尝试下载{file}中")
+                hf_hub_download(
+                    repo_id = DEFAULT_WD14_TAGGER_REPO,
+                    filename = file,
+                    local_dir = download_dir,
+                )
+        
+        # 下载模型
+        if not os.path.exists( model_path ) or keep_updating:  # 实际上 model_path == os.path.join( download_dir, wd14_model_dir_name_in_repo, model_name )
+            print(f"尝试下载{model_name}中")
+            hf_hub_download(
+                repo_id = DEFAULT_WD14_TAGGER_REPO,
+                filename = model_name,
+                subfolder = wd14_model_dir_name_in_repo,
+                local_dir = download_dir,  # 下载到同一个目录下的{subfolder}文件夹内
+            )
+
+
+    def load_model(self, tensorrt_batch_size: Optional[int] = None) -> ort.InferenceSession:
+        """强制载入模型，并赋值给self.model_in_memory
+
+        Args:
+            tensorrt_batch_size (Optional[int], optional): 当为大于0的整数时，会尝试以该batch_size调用tensorrt；如果不希望使用tensorrt，则不要输入此参数. Defaults to None.
+            
+        """
+
+        model_dir = self.model_dir  # 模型项目所在文件夹
+        model_name = self.model_name  # onnx模型文件名字
+        model_path = self.model_path  # onnx模型文件路径
+
+        # 载入模型
+        print(f"载入新的模型： {model_name}")
+        InferenceSession_time_start = time.time()
+
+        # 设置执行者参数
+        # 如果启用了tensorrt，则会将引擎缓存至 模型目录/{TRT_ENGINE_CACHE_DIR}/模型文件名(不带扩展名) 文件夹内
+        trt_engine_cache_path = os.path.join(model_dir, TRT_ENGINE_CACHE_DIR, os.path.splitext(model_name)[0])
+        os.makedirs(trt_engine_cache_path, exist_ok=True)  # 手动创建一个文件夹，否则会报错
+        # 由set_providers()内部通过tensorrt_batch_size判断是否使用tensorrt执行者
+        providers = set_providers(
+            trt_engine_cache_path = trt_engine_cache_path,
+            tensorrt_batch_size = tensorrt_batch_size,
+        )
+
+        model_in_memory = ort.InferenceSession(model_path, providers=providers)
+        print("载入模型用时", time.time() - InferenceSession_time_start, "秒")
+
+        # 检查是否是本项目的模型
+        outputs_name_list = [x.name for x in model_in_memory.get_outputs()]
+        inputs_name_list = [x.name for x in model_in_memory.get_inputs()]
+
+        assert len(inputs_name_list) == 1, "onnx模型输入层不止一个，可能你使用的模型不是本项目的模型"
+        assert inputs_name_list[0] == INPUT_NAME, f"onnx模型输入层名字不是{INPUT_NAME}，可能你使用的模型不是本项目的模型"
+        assert len(outputs_name_list) == MULTI_OUTPUT_NUMBER, f"onnx模型输出层不是{MULTI_OUTPUT_NUMBER}个，可能你使用的模型不是本项目的模型"
+        
+        total_len = sum(len(sub_tags) for sub_tags in self.tags)
+        layer0_output_shape = model_in_memory.get_outputs()[0].shape[1]
+        assert total_len == layer0_output_shape, f"tags数量{total_len}和预测向量维度{layer0_output_shape}不一致"
+
+        self.model_in_memory = model_in_memory
+
+        return self.model_in_memory
+
+
+    def inference(
+        self,
+        # 数据集相关
+        train_data_dir: str,
+        batch_size: int = 1,
+        max_data_loader_n_workers: Optional[int] = None,
+        recursive: Optional[bool] = None,
+        # 模型推理参数
+        general_threshold: float = DEFAULT_TAGGER_THRESHOLD,
+        characters_threshold: float = DEFAULT_TAGGER_THRESHOLD,
+        caption_extension: str = DEFAULT_TAGGER_CAPTION_EXTENSION,
+        remove_underscore: Optional[bool] = None,
+        rating: Optional[bool] = None,
+        debug: Optional[bool] = None,
+        undesired_tags: Optional[str] =  None,
+        # 推理并发
+        concurrent_inference: Optional[bool] = None,
+        # tensorrt相关
+        tensorrt_batch_size: Optional[int] = None,
+    ) -> None:
+        """进行图片tagger推理
+
+        Args:
+            train_data_dir (str): 需要推理的图片所在目录
+            batch_size (int, optional): 推理batch_size大小. Defaults to 1.
+            max_data_loader_n_workers (Optional[int], optional): Torch.DataLoader的进程数，设置成0则使用DataLoader但不使用子进程，大于0的整数则使用相应的子进程数载入数据，其余值则不使用DataLoader. Defaults to None.
+            recursive (Optional[bool], optional): 递归推理子文件夹. Defaults to None.
+            general_threshold (float, optional): 常规描述tag的推理阈值，越大越准确，但tag数量越少. Defaults to DEFAULT_TAGGER_THRESHOLD.
+            characters_threshold (float, optional): 特定任务tag的推理阈值，越大越准确，但tag数量越少. Defaults to DEFAULT_TAGGER_THRESHOLD.
+            caption_extension (str, optional): 输出的tag文件扩展名. Defaults to DEFAULT_TAGGER_CAPTION_EXTENSION.
+            remove_underscore (Optional[bool], optional): 是否将tag字符串中的下划线'_'替换为空格' '. Defaults to None.
+            rating (Optional[bool], optional): 是否标记上限制级tag. Defaults to None.
+            debug (Optional[bool], optional): debug模式，将会在每次处理完一张图片后，立马输出标签内同. Defaults to None.
+            undesired_tags (Optional[str], optional): 不希望标记的tag，以逗号分割，可以有空格 e.g "1girl, solo". Defaults to None.
+            concurrent_inference (Optional[bool], optional): 载入数据的同时进行推理，建议在GPU模式下使用. Defaults to None.
+            tensorrt_batch_size (Optional[int], optional): tensorrt执行者的batch_size，需要tensorrt环境的支持；设置为大于0的整数生效，会启用tensorrt执行者. Defaults to None.
+
+        Returns:
+            _type_: None
+        """
+
+        # 如果没载入过模型，就载入一次
+        # 如果tensorrt_batch_size是有效值，则会启用tensorrt执行者
+        if not isinstance(self.model_in_memory, ort.InferenceSession):
+            self.load_model(tensorrt_batch_size)
+        
+        # 启用了tensorrt的话，batch_size应该被限制在tensorrt_batch_size以内，不然需要重新编译
+        if isinstance(tensorrt_batch_size, int) and tensorrt_batch_size > 0 :
+            inference_batch = min(batch_size, tensorrt_batch_size)
+        else:
+            inference_batch = batch_size
+
+        # 获取不想要的tags列表
+        undesired_tags_list = undesired_tags_str_to_list(undesired_tags)
+
+        # 数据集载入器
+        data = load_data(
+            train_data_dir = train_data_dir,
+            recursive = recursive,
+            # 决定是否使用DataLoader
+            # 注意，这里请用>=判断，因为DataLoader接受0，代表不用子进程
+            use_torch_dataloader = bool(isinstance(max_data_loader_n_workers, int) and max_data_loader_n_workers >= 0),
+            # DataLoader的参数，如果不用DataLoader则不起作用
+            batch_size = inference_batch,
+            num_workers = max_data_loader_n_workers,
+        )
+
+        def run_batch_wrapper(path_imgs: List[Tuple[str, np.ndarray]]):
+            """ 用于包装run_batch，因为run_batch的参数太多了，不好传递 """
+            return run_batch(
+                path_imgs=path_imgs,
+                ort_session=self.model_in_memory,  # type: ignore
+                general_threshold=general_threshold,
+                characters_threshold=characters_threshold,
+                rating_tags=self.tags[0],
+                general_tags=self.tags[1],
+                characters_tags=self.tags[2],
+                caption_extension=caption_extension,
+                remove_underscore=remove_underscore,
+                rating=rating,
+                debug=debug,
+                undesired_tags_list=undesired_tags_list,
+            )
+        
+        def copy_wd14_tags_toml():
+            """ 拷贝一份tag文件到数据集文件夹 """
+            wd14_tags_toml_path = self.wd14_tags_toml_path
+            wd14_tags_toml_name = os.path.basename(wd14_tags_toml_path)
+            copy_wd14_tags_toml_path = os.path.join(train_data_dir, wd14_tags_toml_name)
+            try:
+                shutil.copy2(wd14_tags_toml_path, copy_wd14_tags_toml_path)
+            except Exception as e:
+                logging.warning(f"Warning! Copy tag file: {wd14_tags_toml_name} Failed\nError: {e}")
+        
+        # 如果使用并行推理，那么就创建线程池来管理进程
+        # 设置成1就行了，主要是不让GPU推理阻塞CPU上数据集读取
+        # 更快的并发应该通过调大batch_size来实现，而不是通过多线程
+        # ！！！ 如果不为1，会出现争抢问题，会带来死锁；需要把ort.InferenceSession放在run_batch里 ！！！
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=1) if concurrent_inference else None
+        if pool is not None:
+            print("并发推理已启用，将使用将使用线程池进行推理")
+
+        try:
+
+            copy_wd14_tags_toml()  # 拷贝一份tag文件，用于方便聚类做特征重要性分析
+
+            pool_futures_list = []  # 用于跟踪进程完成进度
+            b_imgs = []  # 起到类似队列的作用
+            tqdm.write("分配进程中...")
+            for data_entry in tqdm( data, smoothing=0.0, total=len(data) ):
+                for data in data_entry:
+                    # kohya原来就是这样写的，我也不知道为什么要再做一次判断
+                    if data is None:
+                        continue
+
+                    image, image_path = data
+
+                    # 如果是None，代表没有用DataLoader，那么就要手动处理图片
+                    if image is None:
+                        try:
+                            image = load_image(image_path)
+                        except Exception as e:
+                            print(f"Could not load image path / 画像を読み込めません: {image_path}, error: {e}")
+                            continue
+                    
+                    # 将处理好的图片加到队列中
+                    b_imgs.append((image_path, image))
+
+                    # 一旦凑满了一个批，就进行推理
+                    if len(b_imgs) >= inference_batch:
+                        # 如果启用并发推理，则提交任务到线程池，避免同步任务阻塞
+                        if pool is not None:
+                            # 注意这里必须要存在一个新list里，不然直接用b_imgs.clear()，会出现线程还没调用，内存中b_imgs就已经被删了
+                            b_imgs_batch = [(str(image_path), image) for image_path, image in b_imgs]  # Convert image_path to string
+                            pool_futures_list.append( pool.submit(run_batch_wrapper, b_imgs_batch) )  # 分配任务给进程池
+                        # 没有并发就正常调用
+                        else:
+                            run_batch_wrapper(b_imgs)
+                        # 清理以释放内存
+                        b_imgs.clear()
+
+            # TODO: 对于残缺批，考虑手动补充一些空数据，这样可以避免batch变化时的巨大开销
+            # 不能删掉这段，因为可能会有些小于batch_size的图片没有被推理
+            if len(b_imgs) > 0:
                 # 如果启用并发推理，则提交任务到线程池，避免同步任务阻塞
                 if pool is not None:
-                    # 注意这里必须要存在一个新list里，不然直接用b_imgs.clear()，会出现线程还没调用，内存中b_imgs就已经被删了
-                    b_imgs_batch = [(str(image_path), image) for image_path, image in b_imgs]  # Convert image_path to string
-                    pool_futures_list.append( pool.submit(run_batch, b_imgs_batch) )  # 分配任务给进程池
+                    b_imgs = [(str(image_path), image) for image_path, image in b_imgs]  # Convert image_path to string
+                    pool_futures_list.append( pool.submit(run_batch_wrapper, b_imgs) )  # 分配任务给进程池
                 else:
-                    run_batch(b_imgs)
-                b_imgs.clear()
+                    print(f"处理余下{len(b_imgs)}张图片中...")
+                    run_batch_wrapper(b_imgs) # 同步任务
+                    print("处理完成")
 
-    # 不能删掉这段，因为可能会有些小于batch_size的图片没有被推理
-    if len(b_imgs) > 0:
-        # 如果启用并发推理，则提交任务到线程池，避免同步任务阻塞
-        if pool is not None:
-            b_imgs = [(str(image_path), image) for image_path, image in b_imgs]  # Convert image_path to string
-            pool_futures_list.append( pool.submit(run_batch, b_imgs) )  # 分配任务给进程池
-        else:
-            print(f"处理余下{len(b_imgs)}张图片中...")
-            run_batch(b_imgs) # 同步任务
-            print("处理完成")
-    
-    # 显示完成进度
-    if len(pool_futures_list) > 0:  # 大于零代表启用了并发推理
-        tqdm.write("Waiting for processes to finish...")
-        e_num = 0
-        for future in tqdm( concurrent.futures.as_completed(pool_futures_list), smoothing=0.0, total=len(pool_futures_list) ):
-            try:
-                future.result()
-            except Exception as e:
-                tqdm.write(f"Error: {e}")
-                e_num += 1
-                continue
-        print(f"Error count: {e_num}")
-    
-    # 释放线程池
-    if pool is not None:
-        pool.shutdown(wait=True)
+            # 显示完成进度
+            if len(pool_futures_list) > 0:  # 大于零代表启用了并发推理
+                tqdm.write("Waiting for processes to finish...")
+                e_num = 0
+                for future in tqdm( concurrent.futures.as_completed(pool_futures_list), smoothing=0.0, total=len(pool_futures_list) ):
+                    try:
+                        future.result()
+                    # 检查是否某个任务发送了错误而无正常返回
+                    except Exception as e:
+                        tqdm.write(f"Error: {e}")
+                        e_num += 1
+                        continue
+                print(f"Error count: {e_num}")
+            
+            print("done!")
 
-    if args.frequency_tags:
-        sorted_tags = sorted(tag_freq.items(), key=lambda x: x[1], reverse=True)
-        print("\nTag frequencies:")
-        for tag, freq in sorted_tags:
-            print(f"{tag}: {freq}")
-
-    print("done!")
-
-    # 如果是API调用，则返回ort客户端，方便保存模型在显存中，能够快速下一次推理
-    return ort_session
+        finally:
+            # 释放线程池
+            if pool is not None:
+                pool.shutdown(wait=True)
 
 
-def setup_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("train_data_dir", type=str, help="directory for train images / 学習画像データのディレクトリ")
-    parser.add_argument(
-        "--repo_id",
-        type=str,
-        default=DEFAULT_WD14_TAGGER_REPO,
-        help="repo id for wd14 tagger on Hugging Face / Hugging Faceのwd14 taggerのリポジトリID",
-    )
-    parser.add_argument(
-        "--model_dir",
-        type=str,
-        default="wd14_tagger_model",
-        help="directory to store wd14 tagger model / wd14 taggerのモデルを格納するディレクトリ",
-    )
-    parser.add_argument(
-        "--force_download", action="store_true", help="force downloading wd14 tagger models / wd14 taggerのモデルを再ダウンロードします"
-    )
-    parser.add_argument("--batch_size", type=int, default=1, help="batch size in inference / 推論時のバッチサイズ")
-    parser.add_argument(
-        "--max_data_loader_n_workers",
-        type=int,
-        default=None,
-        help="enable image reading by DataLoader with this number of workers (faster) / DataLoaderによる画像読み込みを有効にしてこのワーカー数を適用する（読み込みを高速化）",
-    )
-    parser.add_argument(
-        "--caption_extention",
-        type=str,
-        default=None,
-        help="extension of caption file (for backward compatibility) / 出力されるキャプションファイルの拡張子（スペルミスしていたのを残してあります）",
-    )
-    parser.add_argument("--caption_extension", type=str, default=".txt", help="extension of caption file / 出力されるキャプションファイルの拡張子")
-    parser.add_argument("--thresh", type=float, default=0.35, help="threshold of confidence to add a tag / タグを追加するか判定する閾値")
-    parser.add_argument(
-        "--general_threshold",
-        type=float,
-        default=None,
-        help="threshold of confidence to add a tag for general category, same as --thresh if omitted / generalカテゴリのタグを追加するための確信度の閾値、省略時は --thresh と同じ",
-    )
-    parser.add_argument(
-        "--character_threshold",
-        type=float,
-        default=None,
-        help="threshold of confidence to add a tag for character category, same as --thres if omitted / characterカテゴリのタグを追加するための確信度の閾値、省略時は --thresh と同じ",
-    )
-    parser.add_argument("--recursive", action="store_true", help="search for images in subfolders recursively / サブフォルダを再帰的に検索する")
-    parser.add_argument(
-        "--remove_underscore",
-        action="store_true",
-        help="replace underscores with spaces in the output tags / 出力されるタグのアンダースコアをスペースに置き換える",
-    )
-    parser.add_argument("--debug", action="store_true", help="debug mode")
-    parser.add_argument(
-        "--undesired_tags",
-        type=str,
-        default="",
-        help="comma-separated list of undesired tags to remove from the output / 出力から除外したいタグのカンマ区切りのリスト",
-    )
-    parser.add_argument("--frequency_tags", action="store_true", help="Show frequency of tags for images / 画像ごとのタグの出現頻度を表示する")
-    parser.add_argument("--concurrent_inference", action="store_true",
-                        help="Concurrently read dataset and inference, may increase RAM usage, recommend to use in GPU mode / 并发的进行数据集读取和模型推理，可能会增加RAM占用，建议在GPU模式下使用"
-    )
-    parser.add_argument("--tensorrt", action="store_true", help="Use TensorRT for inference, it is recommended to specify tensorrt_batch_size explicitly at the same time / 使用TensorRT进行推理,建议同时现式的指定tensorrt_batch_size")
-    parser.add_argument("--tensorrt_batch_size", type=int, default=2,
-                        help="Max batch size for TensorRT model compilation, the larger the longer the compilation time, not recommended to be greater than 4, can be different with batch_size / TensorRT模型编译时所需要支持的最大batch size，越大编译时间越长，不建议大于4； 可以与batch_size不同"
-    )
-    
-    return parser
-
-if __name__ == "__main__":
-
-    start_time = time.time()
-    print("WD14 Tagger 开始")
-
-    parser = setup_parser()
-    
-    args = parser.parse_args()
-
-    # スペルミスしていたオプションを復元する
-    if args.caption_extention is not None:
-        args.caption_extension = args.caption_extention
-
-    if args.general_threshold is None:
-        args.general_threshold = args.thresh
-    if args.character_threshold is None:
-        args.character_threshold = args.thresh
-
-    main(args)
-    print("time used: ", time.time() - start_time)
+    def unload_model(self) -> None:
+        """释放模型内存，方便更换模型种类或减少占用"""
+        self.model_in_memory = None
+        time.sleep(0.1)
+        gc.collect()
