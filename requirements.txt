@@ -1,25 +1,25 @@
+# If you want to install with CUDA, please use the following command:
+
+# --extra-index-url https://download.pytorch.org/whl/cu118
+# torch==2.0.0+cu118
+# torchvision==0.15.1+cu118
+
 ### for all ###
 gradio>=3.31.0
 tqdm
 pandas
 pillow
 numpy
+torch
 
 ### for deduplicate ###
 toml
 imagededup
-torch
 
 ### for cluster ###
-# matplotlib
-# scipy
 scikit-learn >= 1.2.2
 
 ### for tagger ###
-torch
-tensorflow>=2.10.1, <2.11
 huggingface_hub
 opencv-python>=4.7.0.68
-onnx
 onnxruntime-gpu
-tf2onnx

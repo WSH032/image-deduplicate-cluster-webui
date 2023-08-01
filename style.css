@@ -1,3 +1,4 @@
 /* 在SD-WebUI中设置 deduplicate_images.py 和 cluster_images.py 的CSS样式 */
 
 .attention {color: red  !important}
+.recommendation {color: dodgerblue !important}

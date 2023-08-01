@@ -1,21 +1,25 @@
 """
-在SD-WebUI中注册一个tab界面
+在SD-WebUI中注册tab界面
 """
 
-from modules import script_callbacks # type: ignore # SD-WebUI自带的依赖
-import gradio as gr
-from cluster_images import demo as cluster_images_demo
-from deduplicate_images import demo as deduplicate_images_demo
+from modules import script_callbacks  # type: ignore # SD-WebUI自带的依赖
 
-def create_demo():
-	with gr.Blocks("Deduplicate-Cluster-Image") as demo:
-		with gr.TabItem("Deduplicate Images"):
-			deduplicate_images_demo.render()
-		with gr.TabItem("Cluster Images"):
-			cluster_images_demo.render()
-	return demo	
+import cluster_images
+import deduplicate_images
+from ui.tools.js import BaseJS
+
+
+# 起到全局修改效果，用A1111_WebUI提供的gradioApp()代替documnet
+BaseJS.set_cls_attr(is_a1111_webui=True)
+
+
+def deduplicate_images_ui_tab():
+	return (deduplicate_images.create_ui(), deduplicate_images.title, deduplicate_images.title)
+
+def cluster_images_ui_tab():
+	return (cluster_images.create_ui(), cluster_images.title, cluster_images.title)
 
 def ui_tab():
-		return [(create_demo(), "Deduplicate-Cluster-Image", "Deduplicate-Cluster-Image")]
-		
+	return [cluster_images_ui_tab(), deduplicate_images_ui_tab()]
+
 script_callbacks.on_ui_tabs(ui_tab)
