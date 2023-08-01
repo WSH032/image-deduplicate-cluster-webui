@@ -3,8 +3,14 @@
 """
 
 from modules import script_callbacks  # type: ignore # SD-WebUI自带的依赖
+
 import cluster_images
 import deduplicate_images
+from ui.tools.js import BaseJS
+
+
+# 起到全局修改效果，用A1111_WebUI提供的gradioApp()代替documnet
+BaseJS.set_cls_attr(is_a1111_webui=True)
 
 
 def deduplicate_images_ui_tab():

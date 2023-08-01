@@ -43,5 +43,10 @@ def create_ui() -> gr.Blocks:
 ############################## 命令行启动 ##############################
 
 if __name__ == "__main__":
+
+    # 不在SD-WebUI里运行，没有gradioApp()，所以需要修改BaseJS的类属性以达到全局应用documnet
+    from ui.tools.js import BaseJS
+    BaseJS.set_cls_attr(is_a1111_webui=False)
+
     demo = create_ui()
     demo.launch(debug=True, inbrowser=True)

@@ -1,3 +1,5 @@
+import logging
+
 import gradio as gr
 import torch
 
@@ -16,7 +18,14 @@ from ui.deduplicate_fn import (
     HASH_METHODS_CHOICES_LIST,
     CNN_METHODS_CHOICES_LIST,
     release_torch_memory,
+    CONFIRM_KEYBORAD_KEY,
+    CANCEL_KEYBORAD_KEY,
 )
+from ui.deduplicate_js import (
+    Keydown2Click,
+    Click2Hide,
+)
+from ui.tools import js
 from tag_images_by_wd14_tagger import (
     DEFAULT_TAGGER_CAPTION_EXTENSION,  # 默认打标文件的扩展名
     WD14_NPZ_EXTENSION,  # 用于保存推理所得特征向量的文件扩展名
@@ -36,6 +45,14 @@ css = """
 """
 blocks_name = "Deduplicate"
 
+ELEM_ID_PREFIX = f"{js.ELEM_ID_PREFIX}{blocks_name}_"
+
+CONFIRM_BUTTON_ELEM_ID = f"{ELEM_ID_PREFIX}confirm_button"  # 确定选择按钮的elem_id
+CANCEL_BUTTON_ELEM_ID = f"{ELEM_ID_PREFIX}cancel_button"  # 取消选择按钮的elem_id
+DUPLICATES_IMAGES_GALLERY_ELEM_ID = f"{ELEM_ID_PREFIX}duplicates_images_gallery"  # 重复图片画廊的elem_id
+
+KEYBOARD_SHORTCUT_TIPS_HTML_ELEM_ID = f"{ELEM_ID_PREFIX}keyboard_shortcut_tips_html"  # 键盘快捷键提示的elem_id
+
 
 ##############################  Markdown  ##############################
 
@@ -52,6 +69,39 @@ process_clusters_tips_markdown = f"""
 ### 自动选择
 自动选择是一种启发式算法，可以在去重的同时尽可能保留不重复的图片
 
+"""
+
+KEYBOARD_SHORTCUT_TIPS_HTML = f"""
+<style>
+    .ant-alert {{
+        box-sizing: border-box;
+        margin: 0;
+        color: #000000d9;
+        font-size: 14px;
+        font-variant: tabular-nums;
+        line-height: 1.5715;
+        list-style: none;
+        font-feature-settings: "tnum";
+        position: relative;
+        display: flex;
+        align-items: center;
+        padding: 8px 15px;
+        word-wrap: break-word;
+        border-radius: 2px
+    }}
+    .ant-alert-content {{
+        flex: 1;
+        min-width: 0
+    }}
+    .ant-alert-info {{
+        background-color: #fff1e6;
+        border: 1px solid #f7ae83
+    }}
+</style>
+
+<span class="ant-alert ant-alert-info ant-alert-content">
+    您可以通过[{CONFIRM_KEYBORAD_KEY}]和[{CANCEL_KEYBORAD_KEY}]键来快速选择与取消(点击隐藏此提示)
+</span>
 """
 
 
@@ -118,11 +168,14 @@ def create_ui() -> gr.Blocks:
         with gr.Box():
             with gr.Row():
                 with gr.Column(scale=3):
+                    """请保持画廊、HTML、确认、取消选择按钮的elem_id为相应的常量，js需要依靠这些elem_id来绑定事件"""
                     with gr.Row():
-                        duplicates_images_gallery = gr.Gallery(label="重复图片", value=[]).style(columns=6, height="auto", preview=False)
+                        gr.HTML(KEYBOARD_SHORTCUT_TIPS_HTML, elem_id=KEYBOARD_SHORTCUT_TIPS_HTML_ELEM_ID)
                     with gr.Row():
-                        confirm_button = gr.Button("选择图片")
-                        cancel_button = gr.Button("取消图片")
+                        duplicates_images_gallery = gr.Gallery(label="重复图片", value=[], elem_id=DUPLICATES_IMAGES_GALLERY_ELEM_ID).style(columns=6, height="auto", preview=False)
+                    with gr.Row():
+                        confirm_button = gr.Button(f"选择图片 [{CONFIRM_KEYBORAD_KEY}]", elem_id=CONFIRM_BUTTON_ELEM_ID)
+                        cancel_button = gr.Button(f"取消图片 [{CANCEL_KEYBORAD_KEY}]", elem_id=CANCEL_BUTTON_ELEM_ID)
                     with gr.Row():
                         image_info_json = gr.JSON()
                 with gr.Column(scale=1):
@@ -233,5 +286,52 @@ def create_ui() -> gr.Blocks:
             inputs=[],
             outputs=[selected_images_str]
         )
+
+
+        ############################## 载入js ##############################
+
+        def load_js():
+            keydown2click = Keydown2Click().make_js
+            _js_list = []
+            # 绑定 选择图片 快捷键
+            _js_list.append(
+                js.wrap_js_to_function(
+                    keydown2click(
+                        obj_id=DUPLICATES_IMAGES_GALLERY_ELEM_ID,
+                        button_id=CONFIRM_BUTTON_ELEM_ID,
+                        keyboard_key=CONFIRM_KEYBORAD_KEY,
+                    )
+                )
+            )
+            # 绑定 取消选择 快捷键
+            _js_list.append(
+                js.wrap_js_to_function(
+                    keydown2click(
+                        obj_id=DUPLICATES_IMAGES_GALLERY_ELEM_ID,
+                        button_id=CANCEL_BUTTON_ELEM_ID,
+                        keyboard_key=CANCEL_KEYBORAD_KEY,
+                    )
+                )
+            )
+            # 绑定 点击则隐藏Tips 事件
+            click2hide = Click2Hide().make_js
+            _js_list.append(
+                js.wrap_js_to_function(
+                    click2hide(
+                        obj_id=KEYBOARD_SHORTCUT_TIPS_HTML_ELEM_ID,
+                    )
+                )
+            )
+            for _js in _js_list:
+                logging.info(f"{blocks_name}组件载入js:\n{_js}")
+                deduplicate_ui.load(
+                    fn=None,
+                    inputs=[],
+                    outputs=[],
+                    _js=_js,
+                )
+
+        load_js()
+
 
     return deduplicate_ui
