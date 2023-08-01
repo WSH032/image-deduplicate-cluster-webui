@@ -54,6 +54,10 @@ CNN_METHODS_CHOICES_LIST = [
     "CNN",
 ]
 
+# 请使用js标准key，在deduplicate_ui中被使用
+CONFIRM_KEYBORAD_KEY = "Enter"  # 确定选择按钮的键盘按键
+CANCEL_KEYBORAD_KEY = "Backspace"  # 取消选择按钮的键盘按键
+
 
 ############################## 全局变量 ##############################
 
@@ -729,7 +733,7 @@ def get_choose_image_index(
         else:
             return "secondary"
 
-    gr_confirm_button = gr.update( value=f"选择 {evt.value}", variant=variant(flag[0]) )
-    gr_cancel_button = gr.update( value=f"取消 {evt.value}", variant=variant(flag[1]) )
+    gr_confirm_button = gr.update( value=f"选择 {evt.value} [{CONFIRM_KEYBORAD_KEY}]", variant=variant(flag[0]) )
+    gr_cancel_button = gr.update( value=f"取消 {evt.value} [{CANCEL_KEYBORAD_KEY}]", variant=variant(flag[1]) )
     
     return gr_confirm_button, gr_cancel_button, image_info_json
