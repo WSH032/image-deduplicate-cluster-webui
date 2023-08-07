@@ -10,9 +10,9 @@ PATH_TOOLS_PATH = os.path.abspath(__file__)
 
 TOOLS_DIR = os.path.dirname(PATH_TOOLS_PATH)
 
-UI_DIR = os.path.dirname(TOOLS_DIR)
+PACKAGE_DIR = os.path.dirname(TOOLS_DIR)  # 做为包的文件夹的路径
 
-CWD = os.path.dirname(UI_DIR)  # 整个项目的根目录
+CWD = os.path.dirname(PACKAGE_DIR)  # 整个项目的根目录路径
 """
 from tools import path_tools
 path_tools.CWD

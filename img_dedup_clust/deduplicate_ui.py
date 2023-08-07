@@ -3,7 +3,7 @@ import logging
 import gradio as gr
 import torch
 
-from ui.deduplicate_fn import (
+from img_dedup_clust.deduplicate_fn import (
     find_duplicates_images,
     get_choose_image_index,
     confirm,
@@ -21,11 +21,11 @@ from ui.deduplicate_fn import (
     CONFIRM_KEYBORAD_KEY,
     CANCEL_KEYBORAD_KEY,
 )
-from ui.deduplicate_js import (
+from img_dedup_clust.deduplicate_js import (
     Keydown2Click,
     Click2Hide,
 )
-from ui.tools import js
+from img_dedup_clust.tools import js
 from tag_images_by_wd14_tagger import (
     DEFAULT_TAGGER_CAPTION_EXTENSION,  # 默认打标文件的扩展名
     WD14_NPZ_EXTENSION,  # 用于保存推理所得特征向量的文件扩展名

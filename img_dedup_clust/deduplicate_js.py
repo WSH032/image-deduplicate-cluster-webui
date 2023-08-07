@@ -1,6 +1,6 @@
 import textwrap
 
-from ui.tools.js import (
+from img_dedup_clust.tools.js import (
     BaseJS,
     WrapJsForReadyState,
 )
