@@ -2,7 +2,7 @@ from typing import List, Union
 
 import gradio as gr
 
-from ui.cluster_fn import(
+from img_dedup_clust.cluster_fn import(
     vectorizer,
     confirm_SVD,
     cluster_images,

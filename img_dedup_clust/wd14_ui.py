@@ -4,12 +4,12 @@ from urllib.parse import urljoin
 
 import gradio as gr
 
-from ui.wd14_fn import (
+from img_dedup_clust.wd14_fn import (
     use_wd14,
     release_memory,
     WD14_MODEL_DIR,  # 模型强制的下载目录
 )
-from ui.tools import path_tools
+from img_dedup_clust.tools import path_tools
 from tag_images_by_wd14_tagger import (
     DEFAULT_WD14_TAGGER_REPO,  # huggingface上的WD14模型仓库ID
     WD14_MODEL_TYPE_LIST,  # 允许用户选择的模型种类名字列表，与tag_images_by_wd14_tagger.py后端中一致
@@ -134,7 +134,7 @@ def create_ui() -> gr.Blocks:
         with gr.Row():
             batch_size = gr.Slider(label="batch_size", value=1, minimum=1, maximum=16, step=1, info="越大显存占用越多")
             max_data_loader_n_workers = gr.Slider(
-                label="启用DataLoader多进程数据读取（建议>150张）",
+                label="启用DataLoader多进程数据读取（建议>300张）",
                 value=0,
                 minimum=-1,
                 maximum=16,

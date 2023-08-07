@@ -28,12 +28,12 @@ import gradio as gr
 from tqdm import tqdm
 
 
-from ui.tools.operate_images import (
+from img_dedup_clust.tools.operate_images import (
     cache_images_file,
     operate_images_file,
     CLUSTER_DIR_PREFIX,
 )
-from ui.tools.SearchImagesTags import SearchImagesTags
+from img_dedup_clust.tools.SearchImagesTags import SearchImagesTags
 from tag_images_by_wd14_tagger import (
     DEFAULT_TAGGER_CAPTION_EXTENSION,  # 默认打标文件的扩展名
     WD14_NPZ_EXTENSION,  # 用于保存推理所得特征向量的文件扩展名 # .wd14用来区分kohya的潜变量cache

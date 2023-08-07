@@ -17,7 +17,7 @@ from imagededup.methods import (
 import toml
 from PIL import Image
 
-from ui.tools.operate_images import (
+from img_dedup_clust.tools.operate_images import (
     cache_images_file,
     operate_images_file,
     CLUSTER_DIR_PREFIX,
@@ -94,7 +94,7 @@ def release_torch_memory():
 ##############################  运行查重  ##############################
 
 # TODO: 如果有继承需要
-# 可以使用from ui.tools.partialmethod_tools import make_cls_partialmethod
+# 可以使用from img_dedup_clust.tools.partialmethod_tools import make_cls_partialmethod
 # 将方法修改为偏方法
 class MyHasher:
     def __init__(

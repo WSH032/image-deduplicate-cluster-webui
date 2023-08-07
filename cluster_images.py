@@ -8,7 +8,7 @@ from typing import List
 
 import gradio as gr
 
-from ui import cluster_ui, wd14_ui
+from img_dedup_clust import cluster_ui, wd14_ui
 
 
 """
@@ -21,7 +21,7 @@ from ui import cluster_ui, wd14_ui
 各装饰器的放回值依据各函数的返回值而定
 其实也可以把原输出接在输入函数后面，若出现异常就放回原值就行
 
-可以使用from ui.tools.webui_error_wrapper import webui_error_default_wrapper
+可以使用from img_dedup_clust.tools.webui_error_wrapper import webui_error_default_wrapper
 """
 
 

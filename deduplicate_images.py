@@ -8,7 +8,7 @@ Created on Fri May  5 17:38:31 2023
 
 import gradio as gr
 
-from ui import deduplicate_ui
+from img_dedup_clust import deduplicate_ui
 
 """
 注意！！！
@@ -20,7 +20,7 @@ from ui import deduplicate_ui
 各装饰器的放回值依据各函数的返回值而定
 其实也可以把原输出接在输入函数后面，若出现异常就放回原值就行
 
-可以使用from ui.tools.webui_error_wrapper import webui_error_default_wrapper
+可以使用from img_dedup_clust.tools.webui_error_wrapper import webui_error_default_wrapper
 """
 
 
@@ -45,7 +45,7 @@ def create_ui() -> gr.Blocks:
 if __name__ == "__main__":
 
     # 不在SD-WebUI里运行，没有gradioApp()，所以需要修改BaseJS的类属性以达到全局应用documnet
-    from ui.tools.js import BaseJS
+    from img_dedup_clust.tools.js import BaseJS
     BaseJS.set_cls_attr(is_a1111_webui=False)
 
     demo = create_ui()
